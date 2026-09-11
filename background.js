@@ -10,7 +10,10 @@ let creationConfig = {
   currentBatch: 1,
 };
 let creationActiveTabId = null;
+let creationActiveBatchIdx = 1;
+let creationRedirectHandled = false;
 let creationWatchdogTimer = null;
+let creationCompletedCount = 0;
 
 let activeJobs = {}; // tabId -> job data & watchdog timer
 let config = {
@@ -93,9 +96,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.storage.local.set({ activityLogs: [] });
     sendResponse({ status: "cleared" });
   } else if (message.action === "get_creation_tab_params") {
-    const job = tabId && parallelCreationJobs[tabId] ? parallelCreationJobs[tabId] : null;
+    const handle = incrementIdentifier(creationConfig.username, creationActiveBatchIdx);
     sendResponse({
-      job,
+      job: {
+        batchIdx: creationActiveBatchIdx,
+        name: creationConfig.channelName,
+        handle,
+      },
       baseName: creationConfig.channelName || "Messi",
       baseUsername: creationConfig.username || "",
     });
@@ -120,6 +127,19 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     console.log(`[Background] Detected signin_prompt during channel creation. Redirecting cleanly to channel_switcher...`);
     chrome.tabs.update(tabId, { url: "https://www.youtube.com/channel_switcher" });
     return;
+  }
+
+  // Detect redirect after channel creation: once active creation tab navigates away from channel_switcher
+  if (isCreatingChannel && tabId === creationActiveTabId && !creationRedirectHandled) {
+    if (
+      tab.url &&
+      !tab.url.includes("channel_switcher") &&
+      !tab.url.includes("signin_prompt")
+    ) {
+      console.log(`[Background] Creation tab ${tabId} started redirecting to: ${tab.url}. Channel creation confirmed!`);
+      handleCreationSuccessOrRedirect(tabId);
+      return;
+    }
   }
 
   if (!activeJobs[tabId]) return;
@@ -157,35 +177,33 @@ function isChatOrTargetUrl(currentUrl, targetUrl) {
 }
 
 // ==============================================================
-// PARALLEL CHANNEL CREATION ORCHESTRATION
+// SEQUENTIAL CHANNEL CREATION ORCHESTRATION
+// (Creates 1 channel at a time, waits for redirect/confirmation before opening the next)
 // ==============================================================
-
-let parallelCreationJobs = {}; // tabId -> { batchIdx, name, handle, status }
-let parallelTotalCount = 0;
-let parallelCompletedCount = 0;
 
 async function handleStartChannelCreation({ channelName, username, count, delayMs }) {
   handleStopAutomation(); // Reset any other ongoing processes
 
   isCreatingChannel = true;
-  parallelCreationJobs = {};
-  parallelCompletedCount = 0;
-  parallelTotalCount = Math.max(1, parseInt(count, 10) || 1);
+  creationCompletedCount = 0;
+  creationActiveBatchIdx = 1;
+  creationRedirectHandled = false;
+
+  const totalCount = Math.max(1, parseInt(count, 10) || 1);
   const baseName = (channelName || "Messi").trim();
   const baseUsername = (username || "Lion_________________1_Messi").trim();
-  const staggerDelay = Math.min(Math.max(300, parseInt(delayMs, 10) || 1000), 2000);
-
-  console.log(
-    `[Background] Starting Parallel Channel Creation: "${baseName}" (@${baseUsername}), Batch Count: ${parallelTotalCount}`
-  );
+  const waitDelay = Math.max(1000, parseInt(delayMs, 10) || 2500);
 
   creationConfig = {
     channelName: baseName,
     username: baseUsername,
-    count: parallelTotalCount,
-    delayMs,
-    currentBatch: 1,
+    count: totalCount,
+    delayMs: waitDelay,
   };
+
+  console.log(
+    `[Background] Starting Sequential Channel Creation: "${baseName}" (@${baseUsername}), Total: ${totalCount}, Delay: ${waitDelay}ms`
+  );
 
   await chrome.storage.local.set({
     isCreatingChannel: true,
@@ -193,57 +211,149 @@ async function handleStartChannelCreation({ channelName, username, count, delayM
     isDeleting: false,
     creationBaseChannelName: baseName,
     creationBaseUsername: baseUsername,
-    creationCurrentChannelName: baseName,
-    creationCurrentHandle: baseUsername,
-    channelName: baseName,
-    channelUsername: baseUsername,
     createBatchCurrent: 0,
-    createBatchTotal: parallelTotalCount,
-    statusText: `Opening ${parallelTotalCount} parallel tab(s) for channel creation...`,
+    createBatchTotal: totalCount,
+    statusText: `Initializing channel creation (1/${totalCount})...`,
   });
 
-  addActivityLog(`Starting creation of ${parallelTotalCount} channel(s) from: "${baseName}" (@${baseUsername})`, "info");
+  addActivityLog(`Starting sequential channel creation (1 to ${totalCount}): "${baseName}" (@${baseUsername})`, "info");
 
-  // Open all tabs in parallel, incrementing the handle from the user's input
-  for (let i = 1; i <= parallelTotalCount; i++) {
-    if (!isCreatingChannel) break;
+  // Launch the first channel tab
+  await launchCreationTab(1);
+}
 
-    const name = baseName;
-    const handle = incrementIdentifier(baseUsername, i);
-
-    const creationUrl = `https://www.youtube.com/channel_switcher?create_channel=true&channel_name=${encodeURIComponent(
-      name
-    )}&channel_username=${encodeURIComponent(handle)}&batch_idx=${i}&batch_total=${parallelTotalCount}#create_channel=true&channel_name=${encodeURIComponent(
-      name
-    )}&channel_username=${encodeURIComponent(handle)}&batch_idx=${i}&batch_total=${parallelTotalCount}`;
-
-    try {
-      const tab = await chrome.tabs.create({
-        url: creationUrl,
-        active: (i === 1), // Keep first tab active, rest in background
+async function launchCreationTab(batchIdx) {
+  if (!isCreatingChannel || batchIdx > creationConfig.count) {
+    if (isCreatingChannel) {
+      isCreatingChannel = false;
+      await chrome.storage.local.set({
+        isCreatingChannel: false,
+        createBatchCurrent: creationConfig.count,
+        statusText: `🎉 All ${creationConfig.count} channels created successfully!`,
       });
-
-      parallelCreationJobs[tab.id] = {
-        batchIdx: i,
-        name,
-        handle,
-        status: "running",
-      };
-
-      console.log(`[Background] Launched Parallel Tab ${i}/${parallelTotalCount} (ID: ${tab.id}) for @${handle}`);
-    } catch (e) {
-      console.error(`[Background] Failed to open tab for batch #${i}:`, e);
-      addActivityLog(`Failed to open tab for batch #${i}: ${e.message}`, "error");
+      addActivityLog(`🎉 All ${creationConfig.count} channels created successfully!`, "success");
+      console.log(`[Background] Finished all ${creationConfig.count} channel creations.`);
     }
-
-    if (i < parallelTotalCount) {
-      await sleep(staggerDelay);
-    }
+    return;
   }
 
+  creationActiveBatchIdx = batchIdx;
+  creationRedirectHandled = false;
+
+  const name = creationConfig.channelName;
+  const handle = incrementIdentifier(creationConfig.username, batchIdx);
+
+  console.log(`[Background] Launching Tab for Channel #${batchIdx}/${creationConfig.count}: "${name}" (@${handle})`);
+
   await chrome.storage.local.set({
-    statusText: `All ${parallelTotalCount} tabs running in parallel. Creating channels...`,
+    createBatchCurrent: batchIdx - 1,
+    creationCurrentChannelName: name,
+    creationCurrentHandle: handle,
+    statusText: `Creating Channel ${batchIdx}/${creationConfig.count}: "${name}" (@${handle})...`,
   });
+  addActivityLog(`Creating Channel ${batchIdx}/${creationConfig.count}: "${name}" (@${handle})`, "info");
+
+  const creationUrl = `https://www.youtube.com/channel_switcher?create_channel=true&channel_name=${encodeURIComponent(
+    name
+  )}&channel_username=${encodeURIComponent(handle)}&batch_idx=${batchIdx}&batch_total=${creationConfig.count}#create_channel=true&channel_name=${encodeURIComponent(
+    name
+  )}&channel_username=${encodeURIComponent(handle)}&batch_idx=${batchIdx}&batch_total=${creationConfig.count}`;
+
+  try {
+    const tab = await chrome.tabs.create({
+      url: creationUrl,
+      active: true,
+    });
+
+    creationActiveTabId = tab.id;
+
+    // Watchdog timer to ensure it never hangs if a single tab freezes
+    if (creationWatchdogTimer) clearTimeout(creationWatchdogTimer);
+    creationWatchdogTimer = setTimeout(() => {
+      handleCreationTimeout(tab.id, batchIdx);
+    }, CREATION_WATCHDOG_TIMEOUT_MS);
+
+  } catch (err) {
+    console.error(`[Background] Failed to launch tab for channel #${batchIdx}:`, err);
+    addActivityLog(`Failed to open tab for channel #${batchIdx}: ${err.message}`, "error");
+    scheduleNextCreation(batchIdx + 1);
+  }
+}
+
+async function handleCreationSuccessOrRedirect(tabId, msg = null) {
+  if (!isCreatingChannel) return;
+  if (creationRedirectHandled) return;
+  creationRedirectHandled = true;
+
+  if (creationWatchdogTimer) {
+    clearTimeout(creationWatchdogTimer);
+    creationWatchdogTimer = null;
+  }
+
+  const batchIdx = creationActiveBatchIdx;
+  const chName = msg?.channelName || creationConfig.channelName;
+  const chHandle = msg?.channelUsername || incrementIdentifier(creationConfig.username, batchIdx);
+
+  creationCompletedCount++;
+  console.log(`[Background] ✅ [${creationCompletedCount}/${creationConfig.count}] Channel #${batchIdx} ("${chName}" / @${chHandle}) confirmed / redirecting!`);
+
+  await chrome.storage.local.set({
+    createBatchCurrent: creationCompletedCount,
+    statusText: `✅ Channel #${batchIdx} created (@${chHandle})! Waiting redirect & opening next...`,
+  });
+  addActivityLog(`✅ Created channel #${batchIdx} (@${chHandle}). Waiting redirect...`, "success");
+
+  // Close completed tab cleanly after short pause
+  setTimeout(async () => {
+    try {
+      if (tabId) await chrome.tabs.remove(tabId);
+    } catch (e) {}
+  }, 1800);
+
+  // Wait user-specified delay, then open next channel tab
+  scheduleNextCreation(batchIdx + 1);
+}
+
+async function scheduleNextCreation(nextBatchIdx) {
+  if (isCreatingChannel && nextBatchIdx <= creationConfig.count) {
+    console.log(`[Background] Waiting ${creationConfig.delayMs}ms before opening Channel #${nextBatchIdx}...`);
+    await sleep(creationConfig.delayMs);
+    if (isCreatingChannel) {
+      await launchCreationTab(nextBatchIdx);
+    }
+  } else if (isCreatingChannel) {
+    isCreatingChannel = false;
+    await chrome.storage.local.set({
+      isCreatingChannel: false,
+      createBatchCurrent: creationConfig.count,
+      statusText: `🎉 All ${creationConfig.count} channels created successfully!`,
+    });
+    addActivityLog(`🎉 All ${creationConfig.count} channels created successfully!`, "success");
+    console.log(`[Background] Sequential channel creation complete.`);
+  }
+}
+
+async function handleCreationTimeout(tabId, batchIdx) {
+  if (!isCreatingChannel) return;
+  console.warn(`[Background] Creation watchdog timeout for Channel #${batchIdx} (tab ${tabId}).`);
+  addActivityLog(`Channel #${batchIdx} timed out waiting for redirect. Proceeding to next...`, "warning");
+
+  try {
+    if (tabId) await chrome.tabs.remove(tabId);
+  } catch (e) {}
+
+  scheduleNextCreation(batchIdx + 1);
+}
+
+function handleCreationTabClosed() {
+  if (!isCreatingChannel) return;
+  console.log(`[Background] Active creation tab was closed.`);
+  if (creationWatchdogTimer) {
+    clearTimeout(creationWatchdogTimer);
+    creationWatchdogTimer = null;
+  }
+  const nextIdx = creationActiveBatchIdx + 1;
+  scheduleNextCreation(nextIdx);
 }
 
 function incrementIdentifier(template, batchIdx) {
@@ -262,7 +372,9 @@ function incrementIdentifier(template, batchIdx) {
     const originalNumStr = match[1];
     const originalNum = parseInt(originalNumStr, 10);
     const newNum = originalNum + offset;
-    const formattedNum = String(newNum).padStart(originalNumStr.length, "0");
+    const formattedNum = originalNumStr.startsWith("0") && originalNumStr.length > 1
+      ? String(newNum).padStart(originalNumStr.length, "0")
+      : String(newNum);
     return template.replace(numberRegex, formattedNum);
   }
 
@@ -283,53 +395,41 @@ async function handleChannelCreationStatus(statusMsg) {
 
 async function handleChannelCreationSuccess(msg, senderTabId) {
   if (!isCreatingChannel) return;
-
-  const batchIdx = msg?.batchIdx;
-  const chName = msg?.channelName;
-  const chHandle = msg?.channelUsername;
-
-  parallelCompletedCount++;
-  console.log(`[Background] ✅ [${parallelCompletedCount}/${parallelTotalCount}] Channel #${batchIdx} ("${chName}" / @${chHandle}) created successfully!`);
-
-  await chrome.storage.local.set({
-    createBatchCurrent: parallelCompletedCount,
-    statusText: `✅ Created ${parallelCompletedCount}/${parallelTotalCount} channels: "${chName}" (@${chHandle})`,
-  });
-  addActivityLog(`✅ Created channel #${batchIdx}: "${chName}" (@${chHandle})`, "success");
-
-  if (senderTabId) {
-    delete parallelCreationJobs[senderTabId];
-  }
-
-  // Check if all parallel jobs completed
-  if (parallelCompletedCount >= parallelTotalCount || Object.keys(parallelCreationJobs).length === 0) {
-    isCreatingChannel = false;
-    await chrome.storage.local.set({
-      isCreatingChannel: false,
-      statusText: `🎉 All ${parallelTotalCount} channels created successfully in parallel!`,
-    });
-    addActivityLog(`🎉 All ${parallelTotalCount} channels created successfully in parallel!`, "success");
-  }
+  handleCreationSuccessOrRedirect(senderTabId || creationActiveTabId, msg);
 }
 
 async function handleChannelCreationError(errorMsg, senderTabId) {
-  console.warn(`[Background] Channel creation error: ${errorMsg}`);
-  if (senderTabId) {
-    delete parallelCreationJobs[senderTabId];
+  console.warn(`[Background] Channel creation error on Channel #${creationActiveBatchIdx}: ${errorMsg}`);
+  addActivityLog(`Channel #${creationActiveBatchIdx} error: ${errorMsg}. Skipping to next...`, "error");
+
+  if (creationWatchdogTimer) {
+    clearTimeout(creationWatchdogTimer);
+    creationWatchdogTimer = null;
   }
-  await chrome.storage.local.set({
-    statusText: `⚠️ Channel creation error: ${errorMsg}`,
-  });
-  addActivityLog(`⚠️ Creation error: ${errorMsg}`, "error");
+
+  try {
+    if (senderTabId) await chrome.tabs.remove(senderTabId);
+  } catch (e) {}
+
+  scheduleNextCreation(creationActiveBatchIdx + 1);
 }
 
 async function handleStopChannelCreation() {
   console.log("[Background] Channel creation stopped by user.");
   isCreatingChannel = false;
-  parallelCreationJobs = {};
+  if (creationWatchdogTimer) {
+    clearTimeout(creationWatchdogTimer);
+    creationWatchdogTimer = null;
+  }
+  if (creationActiveTabId) {
+    try {
+      await chrome.tabs.remove(creationActiveTabId);
+    } catch (e) {}
+    creationActiveTabId = null;
+  }
   await chrome.storage.local.set({
     isCreatingChannel: false,
-    statusText: "Parallel channel creation stopped.",
+    statusText: "Channel creation cancelled by user.",
   });
   addActivityLog("Channel creation cancelled by user", "warning");
 }

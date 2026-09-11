@@ -232,7 +232,7 @@ function updateUI(state) {
   if (isCreateBusy) {
     const curBatch = state.createBatchCurrent || 0;
     const totBatch = state.createBatchTotal || 1;
-    tracksCreateInfo.textContent = `Creating: ${curBatch} / ${totBatch} channels in parallel${state.channelName ? ` ("${state.channelName}")` : ""}`;
+    tracksCreateInfo.textContent = `Creating: ${curBatch} / ${totBatch} channels sequentially${state.creationCurrentHandle ? ` (@${state.creationCurrentHandle})` : ""}`;
   } else {
     tracksCreateInfo.textContent = "Idle - No channels currently being created.";
   }
