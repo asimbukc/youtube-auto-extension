@@ -14,12 +14,14 @@
       --create-accent: #00b4d8;
       --create-hover: #0096c7;
       --create-glow: rgba(0, 180, 216, 0.3);
+      --tracks-accent: #a855f7;
       --text-main: #f0f3f8;
       --text-muted: #8d96a7;
       --input-bg: #242834;
       --border: #2e3547;
       --success: #00e676;
       --warning: #ffb300;
+      --danger: #ef4444;
     }
 
     * {
@@ -29,7 +31,7 @@
     }
 
     body {
-      width: 380px;
+      width: 410px;
       padding: 16px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       background-color: var(--bg-color);
@@ -72,13 +74,13 @@
       border: 1px solid var(--border);
       border-radius: 8px;
       padding: 3px;
-      margin-bottom: 14px;
-      gap: 3px;
+      margin-bottom: 12px;
+      gap: 2px;
     }
 
     .tab-btn {
       flex: 1;
-      padding: 7px 6px;
+      padding: 7px 4px;
       font-size: 11px;
       font-weight: 600;
       background: transparent;
@@ -90,7 +92,8 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 5px;
+      gap: 4px;
+      position: relative;
     }
 
     .tab-btn.active {
@@ -99,21 +102,40 @@
       box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
     }
 
-    .tab-btn.active.tab-create {
-      color: #38bdf8;
-    }
-
     .tab-btn.active.tab-switch {
       color: #ff5252;
+    }
+
+    .tab-btn.active.tab-create {
+      color: #38bdf8;
     }
 
     .tab-btn.active.tab-delete {
       color: #fb7185;
     }
 
+    .tab-btn.active.tab-tracks {
+      color: #c084fc;
+    }
+
     .tab-btn:hover:not(.active) {
       color: var(--text-main);
       background-color: rgba(255, 255, 255, 0.05);
+    }
+
+    .tab-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background-color: transparent;
+      display: inline-block;
+      margin-left: 2px;
+    }
+
+    .tab-dot.busy {
+      background-color: #ffb300;
+      box-shadow: 0 0 6px #ffb300;
+      animation: pulse 1.4s infinite;
     }
 
     .tab-content {
@@ -130,13 +152,57 @@
       to { opacity: 1; transform: translateY(0); }
     }
 
+    /* Tab Status Banner: shows only Free or Busy */
+    .tab-status-banner {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background-color: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 7px 10px;
+      margin-bottom: 12px;
+    }
+
+    .tab-status-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .tab-status-pill {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 9px;
+      border-radius: 12px;
+      letter-spacing: 0.5px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .tab-status-pill.status-free {
+      background-color: rgba(0, 230, 118, 0.12);
+      color: #00e676;
+      border: 1px solid rgba(0, 230, 118, 0.3);
+    }
+
+    .tab-status-pill.status-busy {
+      background-color: rgba(255, 179, 0, 0.15);
+      color: #ffb300;
+      border: 1px solid rgba(255, 179, 0, 0.4);
+      animation: pulse 1.6s infinite;
+    }
+
     .form-group {
       margin-bottom: 11px;
     }
 
     .row {
       display: flex;
-      gap: 10px;
+      gap: 8px;
     }
 
     .row .form-group {
@@ -178,81 +244,21 @@
       box-shadow: 0 0 0 2px var(--create-glow);
     }
 
-    .status-card {
-      background-color: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 9px 11px;
-      margin-bottom: 12px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
+    input::placeholder {
+      color: #5d677a;
+      opacity: 1;
     }
 
-    .status-indicator {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 12px;
-      font-weight: 500;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: 220px;
-    }
-
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background-color: var(--text-muted);
-      transition: background-color 0.3s;
-      flex-shrink: 0;
-    }
-
-    .status-dot.active {
-      background-color: var(--success);
-      box-shadow: 0 0 8px rgba(0, 230, 118, 0.6);
-      animation: pulse 1.8s infinite;
-    }
-
-    .status-dot.active-create {
-      background-color: var(--create-accent);
-      box-shadow: 0 0 8px var(--create-glow);
-      animation: pulse 1.8s infinite;
-    }
-
-    .status-dot.active-delete {
-      background-color: #ff5252;
-      box-shadow: 0 0 8px rgba(255, 82, 82, 0.6);
-      animation: pulse 1.8s infinite;
-    }
-
-    .status-dot.active-paused {
-      background-color: var(--warning);
-      box-shadow: 0 0 10px rgba(255, 179, 0, 0.8);
-      animation: pulse 1.2s infinite;
-    }
-
-    @keyframes pulse {
-      0% { transform: scale(0.95); opacity: 0.8; }
-      50% { transform: scale(1.15); opacity: 1; }
-      100% { transform: scale(0.95); opacity: 0.8; }
-    }
-
-    .badge {
+    .hint-text {
       font-size: 10px;
-      padding: 2px 7px;
-      background-color: var(--input-bg);
-      border: 1px solid var(--border);
-      border-radius: 4px;
       color: var(--text-muted);
-      white-space: nowrap;
+      margin-top: 3px;
     }
 
     .button-group {
       display: flex;
       gap: 8px;
+      margin-top: 12px;
     }
 
     button {
@@ -290,22 +296,10 @@
       box-shadow: 0 4px 12px var(--create-glow);
     }
 
-    .btn-reset {
-      background-color: var(--input-bg);
-      border: 1px solid var(--border);
-      color: var(--text-main);
-    }
-
-    .btn-reset:hover:not(:disabled) {
-      background-color: #2e3547;
-      border-color: #3e4860;
-    }
-
     .btn-delete-channels {
       background-color: #d32f2f;
       color: #ffffff;
-      flex: 2;
-      position: relative;
+      width: 100%;
     }
 
     .btn-delete-channels:hover:not(:disabled) {
@@ -326,7 +320,6 @@
       background-color: #ffb300;
       color: #0f1117;
       font-weight: 700;
-      flex: 2;
       display: none;
       box-shadow: 0 0 10px rgba(255, 179, 0, 0.35);
     }
@@ -337,23 +330,277 @@
     }
 
     .url-notice {
-      font-size: 10px;
+      font-size: 11px;
       color: #8d96a7;
       text-align: center;
-      margin-top: 8px;
+      margin-top: 10px;
       line-height: 1.3;
-    }
-
-    .hint-text {
-      font-size: 10px;
-      color: var(--text-muted);
-      margin-top: 3px;
+      padding: 6px;
+      background: rgba(255, 255, 255, 0.02);
+      border-radius: 6px;
+      border: 1px dashed var(--border);
     }
 
     button:disabled {
       opacity: 0.5;
       cursor: not-allowed;
       box-shadow: none !important;
+    }
+
+    /* ==============================================================
+       TRACKS INTERFACE STYLES
+       ============================================================== */
+    .tracks-global-banner {
+      background-color: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 12px;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 250px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: var(--text-muted);
+      transition: background-color 0.3s;
+      flex-shrink: 0;
+    }
+
+    .status-dot.active {
+      background-color: var(--success);
+      box-shadow: 0 0 8px rgba(0, 230, 118, 0.6);
+      animation: pulse 1.8s infinite;
+    }
+
+    .status-dot.active-create {
+      background-color: var(--create-accent);
+      box-shadow: 0 0 8px var(--create-glow);
+      animation: pulse 1.8s infinite;
+    }
+
+    .status-dot.active-delete {
+      background-color: #ff5252;
+      box-shadow: 0 0 8px rgba(255, 82, 82, 0.6);
+      animation: pulse 1.8s infinite;
+    }
+
+    .status-dot.active-paused {
+      background-color: var(--warning);
+      box-shadow: 0 0 10px rgba(255, 179, 0, 0.8);
+      animation: pulse 1.2s infinite;
+    }
+
+    .badge {
+      font-size: 10px;
+      padding: 2px 7px;
+      background-color: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    /* Operation Cards */
+    .tracks-operations-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .track-card {
+      background-color: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .track-card.busy {
+      border-color: rgba(255, 179, 0, 0.35);
+      background-color: #1c1f2a;
+      box-shadow: 0 0 12px rgba(255, 179, 0, 0.08);
+    }
+
+    .track-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .track-card-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .track-card-title svg {
+      width: 14px;
+      height: 14px;
+      fill: currentColor;
+    }
+
+    .track-card-title.switch-title { color: #ff6b6b; }
+    .track-card-title.create-title { color: #38bdf8; }
+    .track-card-title.delete-title { color: #fb7185; }
+
+    .track-card-info {
+      font-size: 11px;
+      color: var(--text-muted);
+      line-height: 1.35;
+      word-break: break-word;
+      min-height: 16px;
+    }
+
+    .btn-cancel {
+      background-color: #2b171c;
+      border: 1px solid #5a232b;
+      color: #ff6b6b;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 6px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      width: 100%;
+    }
+
+    .btn-cancel:hover:not(:disabled) {
+      background-color: #d32f2f;
+      border-color: #d32f2f;
+      color: #ffffff;
+      box-shadow: 0 2px 8px rgba(211, 47, 47, 0.4);
+    }
+
+    .btn-cancel:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+      border-color: var(--border);
+      color: var(--text-muted);
+      background-color: var(--input-bg);
+      box-shadow: none !important;
+    }
+
+    /* Live Activity Log */
+    .activity-log-section {
+      border-top: 1px solid var(--border);
+      padding-top: 10px;
+    }
+
+    .activity-log-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+
+    .activity-log-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .btn-clear-log {
+      background: transparent;
+      border: none;
+      font-size: 10px;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      transition: color 0.2s, background-color 0.2s;
+    }
+
+    .btn-clear-log:hover {
+      color: var(--text-main);
+      background-color: var(--input-bg);
+    }
+
+    .activity-log-list {
+      background-color: #0b0d13;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 7px 9px;
+      max-height: 110px;
+      overflow-y: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .activity-log-list::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    .activity-log-list::-webkit-scrollbar-thumb {
+      background: #2e3547;
+      border-radius: 2px;
+    }
+
+    .log-entry {
+      display: flex;
+      gap: 6px;
+      line-height: 1.35;
+    }
+
+    .log-time {
+      color: #5c657a;
+      flex-shrink: 0;
+    }
+
+    .log-msg {
+      word-break: break-word;
+    }
+
+    .log-msg.info { color: #94a3b8; }
+    .log-msg.success { color: #00e676; }
+    .log-msg.warning { color: #ffb300; }
+    .log-msg.error { color: #ff5252; }
+
+    .log-empty {
+      color: #4b5563;
+      text-align: center;
+      padding: 8px 0;
+      font-style: italic;
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.15); opacity: 1; }
+      100% { transform: scale(0.95); opacity: 0.8; }
     }
   </style>
 </head>
@@ -371,43 +618,48 @@
   <!-- Tab Bar -->
   <div class="tab-bar">
     <button class="tab-btn active tab-switch" data-tab="switchTab">
-      <svg style="width:13px;height:13px;fill:currentColor;" viewBox="0 0 24 24">
+      <svg style="width:12px;height:12px;fill:currentColor;" viewBox="0 0 24 24">
         <path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h12v12z"/>
       </svg>
-      Switch & Chat
+      Switch
+      <span class="tab-dot" id="switchTabDot"></span>
     </button>
     <button class="tab-btn tab-create" data-tab="createTab">
-      <svg style="width:13px;height:13px;fill:currentColor;" viewBox="0 0 24 24">
+      <svg style="width:12px;height:12px;fill:currentColor;" viewBox="0 0 24 24">
         <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
       </svg>
-      Create Channel
+      Create
+      <span class="tab-dot" id="createTabDot"></span>
     </button>
     <button class="tab-btn tab-delete" data-tab="deleteTab">
-      <svg style="width:13px;height:13px;fill:currentColor;" viewBox="0 0 24 24">
+      <svg style="width:12px;height:12px;fill:currentColor;" viewBox="0 0 24 24">
         <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
       </svg>
-      Delete Brand
+      Delete
+      <span class="tab-dot" id="deleteTabDot"></span>
+    </button>
+    <button class="tab-btn tab-tracks" data-tab="tracksTab">
+      <svg style="width:12px;height:12px;fill:currentColor;" viewBox="0 0 24 24">
+        <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14h-2v-4h2v4zm0-6h-2V7h2v4z"/>
+      </svg>
+      Tracks
+      <span class="tab-dot" id="tracksTabDot"></span>
     </button>
   </div>
 
-  <!-- Global Status Card -->
-  <div class="status-card">
-    <div class="status-indicator">
-      <div class="status-dot" id="statusDot"></div>
-      <span id="statusText">Idle</span>
-    </div>
-    <div class="badge" id="indexBadge">Ready</div>
-  </div>
-
-  <!-- TAB 1: Switch & Chat -->
+  <!-- TAB 1: Switch & Chat (Input fields + Start button only, Free/Busy status) -->
   <div class="tab-content active" id="switchTab">
+    <div class="tab-status-banner">
+      <span class="tab-status-label">Tab Status</span>
+      <span class="tab-status-pill status-free" id="switchTabStatus">Free</span>
+    </div>
+
     <div class="form-group">
       <label for="chatUrl">Live Chat / Redirect URL</label>
       <input
         type="text"
         id="chatUrl"
-        placeholder="https://www.youtube.com/live_chat?..."
-        value="https://www.youtube.com/live_chat?is_popout=1&v=5FW9ZVMR_7M"
+        placeholder="https://www.youtube.com/live_chat?is_popout=1&v=5FW9ZVMR_7M"
         spellcheck="false"
       />
     </div>
@@ -415,33 +667,36 @@
     <div class="row">
       <div class="form-group">
         <label for="startIndex">Start Index</label>
-        <input type="number" id="startIndex" value="0" min="0" max="500" />
+        <input type="number" id="startIndex" placeholder="0" min="0" max="500" />
       </div>
       <div class="form-group">
         <label for="endIndex">End Index</label>
-        <input type="number" id="endIndex" value="19" min="0" max="500" />
+        <input type="number" id="endIndex" placeholder="19" min="0" max="500" />
       </div>
       <div class="form-group">
         <label for="delayMs">Delay (ms)</label>
-        <input type="number" id="delayMs" value="1000" min="200" max="10000" step="100" />
+        <input type="number" id="delayMs" placeholder="1000" min="200" max="10000" step="100" />
       </div>
     </div>
 
     <div class="button-group">
       <button class="btn-start" id="startBtn">Start Automation</button>
-      <button class="btn-reset" id="resetBtn">Stop</button>
     </div>
   </div>
 
-  <!-- TAB 2: Create YouTube Channel -->
+  <!-- TAB 2: Create YouTube Channel (Input fields + Start button only, Free/Busy status) -->
   <div class="tab-content" id="createTab">
+    <div class="tab-status-banner">
+      <span class="tab-status-label">Tab Status</span>
+      <span class="tab-status-pill status-free" id="createTabStatus">Free</span>
+    </div>
+
     <div class="form-group">
       <label for="channelName">Channel Name</label>
       <input
         type="text"
         id="channelName"
         placeholder="e.g. Messi"
-        value="Messi"
         maxlength="50"
         spellcheck="false"
       />
@@ -453,20 +708,19 @@
         type="text"
         id="channelUsername"
         placeholder="e.g. Lion_________________1_Messi"
-        value="Lion_________________1_Messi"
         spellcheck="false"
       />
-      <div class="hint-text">For batch creation, a unique numeric suffix is appended if needed.</div>
+      <div class="hint-text">For batch creation, a unique numeric suffix is appended automatically.</div>
     </div>
 
     <div class="row">
       <div class="form-group">
         <label for="createCount">Count (Qty)</label>
-        <input type="number" id="createCount" value="1" min="1" max="50" />
+        <input type="number" id="createCount" placeholder="1" min="1" max="50" />
       </div>
       <div class="form-group">
         <label for="createDelayMs">Delay (ms)</label>
-        <input type="number" id="createDelayMs" value="2500" min="1000" max="20000" step="500" />
+        <input type="number" id="createDelayMs" placeholder="2500" min="1000" max="20000" step="500" />
       </div>
     </div>
 
@@ -477,12 +731,16 @@
         </svg>
         Create Channel
       </button>
-      <button class="btn-reset" id="stopCreateBtn">Stop</button>
     </div>
   </div>
 
-  <!-- TAB 3: Delete Brand Accounts -->
+  <!-- TAB 3: Delete Brand Accounts (Action button only, Free/Busy status) -->
   <div class="tab-content" id="deleteTab">
+    <div class="tab-status-banner">
+      <span class="tab-status-label">Tab Status</span>
+      <span class="tab-status-pill status-free" id="deleteTabStatus">Free</span>
+    </div>
+
     <div class="button-group">
       <button class="btn-delete-channels" id="deleteChannelsBtn" disabled>
         <svg style="width:16px;height:16px;fill:currentColor;" viewBox="0 0 24 24">
@@ -496,10 +754,86 @@
         </svg>
         Resume Deletion
       </button>
-      <button class="btn-reset" id="stopDeleteBtn">Stop</button>
     </div>
     <div class="url-notice" id="deleteBtnNotice">
       ⚠️ Active only on https://myaccount.google.com/brandaccounts
+    </div>
+  </div>
+
+  <!-- TAB 4: TRACKS INTERFACE (Tracks all data + 3 Cancel buttons) -->
+  <div class="tab-content" id="tracksTab">
+    <!-- Live Status Banner -->
+    <div class="tracks-global-banner">
+      <div class="status-indicator">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Idle (All operations free)</span>
+      </div>
+      <div class="badge" id="indexBadge">Ready</div>
+    </div>
+
+    <!-- 3 Operations Cards with dedicated Cancel buttons -->
+    <div class="tracks-operations-list">
+      <!-- Operation 1: Switch & Chat -->
+      <div class="track-card" id="trackCardSwitch">
+        <div class="track-card-header">
+          <div class="track-card-title switch-title">
+            <svg viewBox="0 0 24 24"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h12v12z"/></svg>
+            Switch & Chat
+          </div>
+          <span class="tab-status-pill status-free" id="tracksSwitchStatus">Free</span>
+        </div>
+        <div class="track-card-info" id="tracksSwitchInfo">Idle - No active channel switching.</div>
+        <button class="btn-cancel" id="cancelSwitchBtn" disabled>
+          <svg style="width:12px;height:12px;fill:currentColor;" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          Cancel Switch & Chat
+        </button>
+      </div>
+
+      <!-- Operation 2: Channel Creation -->
+      <div class="track-card" id="trackCardCreate">
+        <div class="track-card-header">
+          <div class="track-card-title create-title">
+            <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+            Channel Creation
+          </div>
+          <span class="tab-status-pill status-free" id="tracksCreateStatus">Free</span>
+        </div>
+        <div class="track-card-info" id="tracksCreateInfo">Idle - No channels currently being created.</div>
+        <button class="btn-cancel" id="cancelCreateBtn" disabled>
+          <svg style="width:12px;height:12px;fill:currentColor;" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          Cancel Channel Creation
+        </button>
+      </div>
+
+      <!-- Operation 3: Brand Deletion -->
+      <div class="track-card" id="trackCardDelete">
+        <div class="track-card-header">
+          <div class="track-card-title delete-title">
+            <svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+            Brand Deletion
+          </div>
+          <span class="tab-status-pill status-free" id="tracksDeleteStatus">Free</span>
+        </div>
+        <div class="track-card-info" id="tracksDeleteInfo">Idle - No brand accounts being deleted.</div>
+        <button class="btn-cancel" id="cancelDeleteBtn" disabled>
+          <svg style="width:12px;height:12px;fill:currentColor;" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          Cancel Brand Deletion
+        </button>
+      </div>
+    </div>
+
+    <!-- Live Activity Log -->
+    <div class="activity-log-section">
+      <div class="activity-log-header">
+        <div class="activity-log-title">
+          <svg style="width:12px;height:12px;fill:currentColor;" viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
+          Live Activity Log
+        </div>
+        <button class="btn-clear-log" id="clearLogBtn">Clear Log</button>
+      </div>
+      <div class="activity-log-list" id="activityLogList">
+        <div class="log-empty">No activity recorded yet.</div>
+      </div>
     </div>
   </div>
 

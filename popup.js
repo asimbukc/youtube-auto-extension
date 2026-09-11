@@ -6,7 +6,8 @@ const startIndexInput = document.getElementById("startIndex");
 const endIndexInput = document.getElementById("endIndex");
 const delayMsInput = document.getElementById("delayMs");
 const startBtn = document.getElementById("startBtn");
-const resetBtn = document.getElementById("resetBtn");
+const switchTabStatus = document.getElementById("switchTabStatus");
+const switchTabDot = document.getElementById("switchTabDot");
 
 // Create Channel Elements
 const channelNameInput = document.getElementById("channelName");
@@ -14,38 +15,65 @@ const channelUsernameInput = document.getElementById("channelUsername");
 const createCountInput = document.getElementById("createCount");
 const createDelayMsInput = document.getElementById("createDelayMs");
 const createChannelBtn = document.getElementById("createChannelBtn");
-const stopCreateBtn = document.getElementById("stopCreateBtn");
-
-// Common UI Elements
-const statusDot = document.getElementById("statusDot");
-const statusText = document.getElementById("statusText");
-const indexBadge = document.getElementById("indexBadge");
-const tabButtons = document.querySelectorAll(".tab-btn");
-const tabContents = document.querySelectorAll(".tab-content");
+const createTabStatus = document.getElementById("createTabStatus");
+const createTabDot = document.getElementById("createTabDot");
 
 // Delete Channels Elements
 const deleteChannelsBtn = document.getElementById("deleteChannelsBtn");
 const resumeDeleteBtn = document.getElementById("resumeDeleteBtn");
-const stopDeleteBtn = document.getElementById("stopDeleteBtn");
 const deleteBtnNotice = document.getElementById("deleteBtnNotice");
+const deleteTabStatus = document.getElementById("deleteTabStatus");
+const deleteTabDot = document.getElementById("deleteTabDot");
+
+// Tracks Interface Elements
+const statusDot = document.getElementById("statusDot");
+const statusText = document.getElementById("statusText");
+const indexBadge = document.getElementById("indexBadge");
+const tracksTabDot = document.getElementById("tracksTabDot");
+
+const trackCardSwitch = document.getElementById("trackCardSwitch");
+const tracksSwitchStatus = document.getElementById("tracksSwitchStatus");
+const tracksSwitchInfo = document.getElementById("tracksSwitchInfo");
+const cancelSwitchBtn = document.getElementById("cancelSwitchBtn");
+
+const trackCardCreate = document.getElementById("trackCardCreate");
+const tracksCreateStatus = document.getElementById("tracksCreateStatus");
+const tracksCreateInfo = document.getElementById("tracksCreateInfo");
+const cancelCreateBtn = document.getElementById("cancelCreateBtn");
+
+const trackCardDelete = document.getElementById("trackCardDelete");
+const tracksDeleteStatus = document.getElementById("tracksDeleteStatus");
+const tracksDeleteInfo = document.getElementById("tracksDeleteInfo");
+const cancelDeleteBtn = document.getElementById("cancelDeleteBtn");
+
+const activityLogList = document.getElementById("activityLogList");
+const clearLogBtn = document.getElementById("clearLogBtn");
+
+// Navigation Elements
+const tabButtons = document.querySelectorAll(".tab-btn");
+const tabContents = document.querySelectorAll(".tab-content");
 
 let isOnBrandAccountsPage = false;
 let currentActiveTabName = "switchTab";
 
 // Tab Switching logic
+function switchTab(targetTab) {
+  if (!targetTab) return;
+  tabButtons.forEach((b) => b.classList.remove("active"));
+  tabContents.forEach((c) => c.classList.remove("active"));
+
+  const activeBtn = document.querySelector(`.tab-btn[data-tab="${targetTab}"]`);
+  const activeContent = document.getElementById(targetTab);
+
+  if (activeBtn) activeBtn.classList.add("active");
+  if (activeContent) activeContent.classList.add("active");
+  currentActiveTabName = targetTab;
+}
+
 tabButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
     const targetTab = btn.getAttribute("data-tab");
-    if (!targetTab) return;
-
-    tabButtons.forEach((b) => b.classList.remove("active"));
-    tabContents.forEach((c) => c.classList.remove("active"));
-
-    btn.classList.add("active");
-    const targetContent = document.getElementById(targetTab);
-    if (targetContent) targetContent.classList.add("active");
-    currentActiveTabName = targetTab;
-    updateBadge();
+    switchTab(targetTab);
   });
 });
 
@@ -72,6 +100,7 @@ function checkActiveTab() {
         "createDelayMs",
         "createBatchCurrent",
         "createBatchTotal",
+        "activityLogs",
       ],
       (result) => {
         updateUI(result);
@@ -80,156 +109,181 @@ function checkActiveTab() {
   });
 }
 
-function updateBadge() {
-  if (currentActiveTabName === "switchTab") {
-    const start = parseInt(startIndexInput.value, 10) || 0;
-    const end = parseInt(endIndexInput.value, 10) || 0;
-    const total = Math.max(0, end - start + 1);
-    indexBadge.textContent = `Range: ${start} → ${end} (${total} tabs)`;
-  } else if (currentActiveTabName === "createTab") {
-    const count = parseInt(createCountInput.value, 10) || 1;
-    indexBadge.textContent = `Target: ${count} Channel${count > 1 ? "s" : ""}`;
-  } else {
-    indexBadge.textContent = isOnBrandAccountsPage ? "Ready (Brand Page)" : "Inactive";
-  }
-}
-
-startIndexInput.addEventListener("input", updateBadge);
-endIndexInput.addEventListener("input", updateBadge);
-createCountInput.addEventListener("input", updateBadge);
-
 function updateUI(state) {
-  const isRunning = Boolean(state.isRunning);
-  const isDeleting = Boolean(state.isDeleting);
-  const isDeletingPaused = Boolean(state.isDeletingPaused);
-  const isCreating = Boolean(state.isCreatingChannel);
+  const isSwitchBusy = Boolean(state.isRunning);
+  const isCreateBusy = Boolean(state.isCreatingChannel);
+  const isDeleteBusy = Boolean(state.isDeleting || state.isDeletingPaused);
+  const isAnyBusy = isSwitchBusy || isCreateBusy || isDeleteBusy;
+
   const currentIndex = state.currentIndex ?? 0;
-  const startIndex = state.startIndex ?? (parseInt(startIndexInput.value, 10) || 0);
-  const endIndex = state.endIndex ?? (parseInt(endIndexInput.value, 10) || 19);
-  const liveChatUrl = state.liveChatUrl || DEFAULT_URL;
-  const customStatus = state.statusText;
+  const startIndex = state.startIndex ?? 0;
+  const endIndex = state.endIndex ?? 19;
+  const customStatus = state.statusText || "Idle (All operations free)";
 
-  if (state.channelName && document.activeElement !== channelNameInput) {
-    channelNameInput.value = state.channelName;
+  // ---------------------------------------------------------------------------
+  // 1. SPECIFIC TABS: Strictly show only Free or Busy (no detailed messages/errors)
+  // ---------------------------------------------------------------------------
+  // Tab 1: Switch & Chat
+  if (switchTabStatus) {
+    switchTabStatus.textContent = isSwitchBusy ? "Busy" : "Free";
+    switchTabStatus.className = `tab-status-pill ${isSwitchBusy ? "status-busy" : "status-free"}`;
   }
-  if (state.channelUsername && document.activeElement !== channelUsernameInput) {
-    channelUsernameInput.value = state.channelUsername;
+  if (switchTabDot) {
+    switchTabDot.className = `tab-dot ${isSwitchBusy ? "busy" : ""}`;
   }
-  if (state.createCount && document.activeElement !== createCountInput) {
-    createCountInput.value = state.createCount;
+  startBtn.disabled = isAnyBusy;
+
+  // Tab 2: Create Channel
+  if (createTabStatus) {
+    createTabStatus.textContent = isCreateBusy ? "Busy" : "Free";
+    createTabStatus.className = `tab-status-pill ${isCreateBusy ? "status-busy" : "status-free"}`;
   }
-  if (state.createDelayMs && document.activeElement !== createDelayMsInput) {
-    createDelayMsInput.value = state.createDelayMs;
+  if (createTabDot) {
+    createTabDot.className = `tab-dot ${isCreateBusy ? "busy" : ""}`;
+  }
+  createChannelBtn.disabled = isAnyBusy;
+
+  // Tab 3: Delete Brand Accounts
+  if (deleteTabStatus) {
+    deleteTabStatus.textContent = isDeleteBusy ? "Busy" : "Free";
+    deleteTabStatus.className = `tab-status-pill ${isDeleteBusy ? "status-busy" : "status-free"}`;
+  }
+  if (deleteTabDot) {
+    deleteTabDot.className = `tab-dot ${isDeleteBusy ? "busy" : ""}`;
   }
 
-  if (chatUrlInput.value !== liveChatUrl && document.activeElement !== chatUrlInput) {
-    chatUrlInput.value = liveChatUrl;
-  }
-
-  // Reset dot classes
-  statusDot.className = "status-dot";
-
-  if (isCreating) {
-    statusDot.classList.add("active-create");
-    statusText.textContent = customStatus || "Creating Channel...";
-    statusText.style.color = "var(--create-accent)";
-    createChannelBtn.textContent = "Creating...";
-    createChannelBtn.disabled = true;
-    startBtn.disabled = true;
-    deleteChannelsBtn.disabled = true;
-    deleteChannelsBtn.style.display = "inline-flex";
-    resumeDeleteBtn.style.display = "none";
-
-    const currentBatch = state.createBatchCurrent || 1;
-    const totalBatch = state.createBatchTotal || 1;
-    indexBadge.textContent = `Creating: ${currentBatch} / ${totalBatch}`;
-  } else if (isDeletingPaused) {
-    statusDot.classList.add("active-paused");
-    statusText.textContent = customStatus || "Paused (Password Required)";
-    statusText.style.color = "var(--warning)";
+  // Delete Tab actions
+  if (state.isDeletingPaused) {
     deleteChannelsBtn.style.display = "none";
     resumeDeleteBtn.style.display = "inline-flex";
     resumeDeleteBtn.disabled = false;
-    stopDeleteBtn.disabled = false;
-    startBtn.disabled = true;
-    createChannelBtn.disabled = true;
-    indexBadge.textContent = "Paused";
     if (deleteBtnNotice) {
-      deleteBtnNotice.textContent = "🔑 Complete password verification in tab & click Resume";
+      deleteBtnNotice.textContent = "🔑 Verification required in active tab. Complete it & click Resume Deletion.";
       deleteBtnNotice.style.color = "#ffb300";
-      deleteBtnNotice.style.display = "block";
     }
-  } else if (isDeleting) {
-    statusDot.classList.add("active-delete");
-    statusText.textContent = customStatus || "Deleting Channels...";
-    statusText.style.color = "#ff5252";
-    deleteChannelsBtn.style.display = "inline-flex";
-    deleteChannelsBtn.textContent = "Deleting in progress...";
-    deleteChannelsBtn.disabled = true;
-    resumeDeleteBtn.style.display = "none";
-    stopDeleteBtn.disabled = false;
-    startBtn.disabled = true;
-    createChannelBtn.disabled = true;
-    indexBadge.textContent = "Deleting...";
-    if (deleteBtnNotice) deleteBtnNotice.style.display = "none";
-  } else if (isRunning) {
-    statusDot.classList.add("active");
-    statusText.textContent = customStatus || "Running";
-    statusText.style.color = "var(--success)";
-    startBtn.textContent = "Running...";
-    startBtn.disabled = true;
-    createChannelBtn.disabled = true;
-    deleteChannelsBtn.disabled = true;
-    deleteChannelsBtn.style.display = "inline-flex";
-    resumeDeleteBtn.style.display = "none";
-    indexBadge.textContent = `Channel: ${currentIndex} / ${endIndex}`;
-    if (deleteBtnNotice) deleteBtnNotice.style.display = "none";
   } else {
-    statusDot.classList.remove("active", "active-create", "active-delete", "active-paused");
-    statusText.textContent = customStatus || "Idle";
-    statusText.style.color = "var(--text-main)";
-    startBtn.textContent = "Start Automation";
-    startBtn.disabled = false;
-    resumeDeleteBtn.style.display = "none";
     deleteChannelsBtn.style.display = "inline-flex";
-    createChannelBtn.innerHTML = `
-      <svg style="width:15px;height:15px;fill:currentColor;" viewBox="0 0 24 24">
-        <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
-      </svg>
-      Create Channel
-    `;
-    createChannelBtn.disabled = false;
+    resumeDeleteBtn.style.display = "none";
+    deleteChannelsBtn.disabled = isAnyBusy || !isOnBrandAccountsPage;
 
-    // Strict URL check for delete button
-    if (isOnBrandAccountsPage) {
-      deleteChannelsBtn.disabled = false;
-      deleteChannelsBtn.innerHTML = `
-        <svg style="width:16px;height:16px;fill:currentColor;" viewBox="0 0 24 24">
-          <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
-        </svg>
-        Delete Brand Accounts
-      `;
-      if (deleteBtnNotice) {
+    if (deleteBtnNotice) {
+      if (isOnBrandAccountsPage) {
         deleteBtnNotice.textContent = "✅ Active on Google Brand Accounts";
         deleteBtnNotice.style.color = "#00e676";
-        deleteBtnNotice.style.display = "block";
-      }
-    } else {
-      deleteChannelsBtn.disabled = true;
-      deleteChannelsBtn.innerHTML = `
-        <svg style="width:16px;height:16px;fill:currentColor;" viewBox="0 0 24 24">
-          <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
-        </svg>
-        Delete Brand Accounts (Inactive)
-      `;
-      if (deleteBtnNotice) {
+      } else {
         deleteBtnNotice.textContent = "⚠️ Active only on https://myaccount.google.com/brandaccounts";
         deleteBtnNotice.style.color = "#8d96a7";
-        deleteBtnNotice.style.display = "block";
       }
     }
-    updateBadge();
   }
+
+  // ---------------------------------------------------------------------------
+  // 2. TRACKS INTERFACE: Displays all status with message, telemetry & cancel buttons
+  // ---------------------------------------------------------------------------
+  if (tracksTabDot) {
+    tracksTabDot.className = `tab-dot ${isAnyBusy ? "busy" : ""}`;
+  }
+
+  // Global Tracks Status Banner
+  statusDot.className = "status-dot";
+  if (isCreateBusy) {
+    statusDot.classList.add("active-create");
+    statusText.textContent = customStatus;
+    statusText.style.color = "var(--create-accent)";
+    indexBadge.textContent = `Batch: ${state.createBatchCurrent || 1}/${state.createBatchTotal || 1}`;
+  } else if (state.isDeletingPaused) {
+    statusDot.classList.add("active-paused");
+    statusText.textContent = customStatus;
+    statusText.style.color = "var(--warning)";
+    indexBadge.textContent = "Paused";
+  } else if (state.isDeleting) {
+    statusDot.classList.add("active-delete");
+    statusText.textContent = customStatus;
+    statusText.style.color = "#ff5252";
+    indexBadge.textContent = "Deleting";
+  } else if (isSwitchBusy) {
+    statusDot.classList.add("active");
+    statusText.textContent = customStatus;
+    statusText.style.color = "var(--success)";
+    indexBadge.textContent = `Channel: ${currentIndex}/${endIndex}`;
+  } else {
+    statusDot.className = "status-dot";
+    statusText.textContent = customStatus;
+    statusText.style.color = customStatus.toLowerCase().includes("error") ? "var(--danger)" : "var(--text-main)";
+    indexBadge.textContent = "Ready";
+  }
+
+  // Operation Card 1: Switch & Chat
+  tracksSwitchStatus.textContent = isSwitchBusy ? "Busy" : "Free";
+  tracksSwitchStatus.className = `tab-status-pill ${isSwitchBusy ? "status-busy" : "status-free"}`;
+  trackCardSwitch.classList.toggle("busy", isSwitchBusy);
+  cancelSwitchBtn.disabled = !isSwitchBusy;
+  if (isSwitchBusy) {
+    tracksSwitchInfo.textContent = `Processing Channel #${currentIndex} (Range: ${startIndex} → ${endIndex})`;
+  } else {
+    tracksSwitchInfo.textContent = "Idle - No active channel switching.";
+  }
+
+  // Operation Card 2: Channel Creation
+  tracksCreateStatus.textContent = isCreateBusy ? "Busy" : "Free";
+  tracksCreateStatus.className = `tab-status-pill ${isCreateBusy ? "status-busy" : "status-free"}`;
+  trackCardCreate.classList.toggle("busy", isCreateBusy);
+  cancelCreateBtn.disabled = !isCreateBusy;
+  if (isCreateBusy) {
+    const curBatch = state.createBatchCurrent || 0;
+    const totBatch = state.createBatchTotal || 1;
+    tracksCreateInfo.textContent = `Creating: ${curBatch} / ${totBatch} channels in parallel${state.channelName ? ` ("${state.channelName}")` : ""}`;
+  } else {
+    tracksCreateInfo.textContent = "Idle - No channels currently being created.";
+  }
+
+  // Operation Card 3: Brand Accounts Deletion
+  tracksDeleteStatus.textContent = isDeleteBusy ? (state.isDeletingPaused ? "Paused" : "Busy") : "Free";
+  tracksDeleteStatus.className = `tab-status-pill ${isDeleteBusy ? "status-busy" : "status-free"}`;
+  trackCardDelete.classList.toggle("busy", isDeleteBusy);
+  cancelDeleteBtn.disabled = !isDeleteBusy;
+  if (state.isDeletingPaused) {
+    tracksDeleteInfo.textContent = "Paused: Password verification required on tab.";
+  } else if (state.isDeleting) {
+    tracksDeleteInfo.textContent = "Deleting Brand Account channels sequentially...";
+  } else {
+    tracksDeleteInfo.textContent = "Idle - No brand accounts being deleted.";
+  }
+
+  // Render Activity Log
+  renderLogs(state.activityLogs || []);
+}
+
+function renderLogs(logs) {
+  if (!activityLogList) return;
+  if (!logs || logs.length === 0) {
+    activityLogList.innerHTML = '<div class="log-empty">No activity recorded yet.</div>';
+    return;
+  }
+
+  activityLogList.innerHTML = logs
+    .slice(0, 40)
+    .map((log) => {
+      const typeClass = log.type || "info";
+      const timeStr = log.time || "";
+      const escapedMsg = escapeHtml(log.message || "");
+      return `
+        <div class="log-entry">
+          <span class="log-time">[${timeStr}]</span>
+          <span class="log-msg ${typeClass}">${escapedMsg}</span>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 // Initial state and active tab verification
@@ -242,11 +296,15 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
 });
 
-// Start Switch & Chat button click handler
-startBtn.addEventListener("click", async () => {
+// ==============================================================
+// START BUTTON HANDLERS (Tabs only trigger start & switch to Tracks)
+// ==============================================================
+
+// Start Switch & Chat automation
+startBtn.addEventListener("click", () => {
   const chatUrl = chatUrlInput.value.trim() || DEFAULT_URL;
-  const startIndex = parseInt(startIndexInput.value, 10) || 0;
-  const endIndex = parseInt(endIndexInput.value, 10) || 0;
+  const startIndex = startIndexInput.value.trim() !== "" ? parseInt(startIndexInput.value, 10) : 0;
+  const endIndex = endIndexInput.value.trim() !== "" ? parseInt(endIndexInput.value, 10) : 19;
   const delayMs = parseInt(delayMsInput.value, 10) || 1000;
 
   if (endIndex < startIndex) {
@@ -262,33 +320,16 @@ startBtn.addEventListener("click", async () => {
     delayMs,
   });
 
-  window.close();
+  // Switch to Tracks tab to monitor live data
+  switchTab("tracksTab");
 });
 
-// Create YouTube Channel button click handler
-createChannelBtn.addEventListener("click", async () => {
-  const channelName = channelNameInput.value.trim();
-  const username = channelUsernameInput.value.trim();
+// Start YouTube Channel Creation
+createChannelBtn.addEventListener("click", () => {
+  const channelName = channelNameInput.value.trim() || "Messi";
+  const username = channelUsernameInput.value.trim() || "Lion_________________1_Messi";
   const count = Math.max(1, parseInt(createCountInput.value, 10) || 1);
   const delayMs = Math.max(1000, parseInt(createDelayMsInput.value, 10) || 2500);
-
-  if (!channelName) {
-    alert("Please enter a channel name.");
-    return;
-  }
-
-  if (!username) {
-    alert("Please enter a handle / username.");
-    return;
-  }
-
-  // Persist values in storage
-  chrome.storage.local.set({
-    channelName,
-    channelUsername,
-    createCount: count,
-    createDelayMs: delayMs,
-  });
 
   chrome.runtime.sendMessage({
     action: "start_channel_creation",
@@ -298,23 +339,12 @@ createChannelBtn.addEventListener("click", async () => {
     delayMs,
   });
 
-  window.close();
+  // Switch to Tracks tab to monitor live data
+  switchTab("tracksTab");
 });
 
-// Stop Channel Creation button
-stopCreateBtn.addEventListener("click", async () => {
-  chrome.runtime.sendMessage({
-    action: "stop_channel_creation",
-  });
-
-  updateUI({
-    isCreatingChannel: false,
-    statusText: "Channel creation stopped",
-  });
-});
-
-// Delete Channels button click handler (Strictly works on brandaccounts)
-deleteChannelsBtn.addEventListener("click", async () => {
+// Start Brand Accounts Deletion
+deleteChannelsBtn.addEventListener("click", () => {
   if (!isOnBrandAccountsPage) {
     alert("This action only works when your active tab is on: https://myaccount.google.com/brandaccounts");
     return;
@@ -344,11 +374,12 @@ deleteChannelsBtn.addEventListener("click", async () => {
     action: "start_delete_channels",
   });
 
-  window.close();
+  // Switch to Tracks tab to monitor live data
+  switchTab("tracksTab");
 });
 
-// Resume Delete Channels button handler
-resumeDeleteBtn.addEventListener("click", async () => {
+// Resume Brand Accounts Deletion if paused
+resumeDeleteBtn.addEventListener("click", () => {
   chrome.storage.local.set({
     isDeleting: true,
     isDeletingPaused: false,
@@ -367,21 +398,44 @@ resumeDeleteBtn.addEventListener("click", async () => {
     action: "resume_delete_channels",
   });
 
-  updateUI({
-    isDeleting: true,
-    isDeletingPaused: false,
-    statusText: "Resuming channel deletion...",
-  });
-
-  window.close();
+  switchTab("tracksTab");
 });
 
-// Stop Delete Channels button handler
-stopDeleteBtn.addEventListener("click", async () => {
+// ==============================================================
+// 3 DEDICATED CANCEL BUTTONS IN TRACKS INTERFACE
+// ==============================================================
+
+// 1. Cancel Switch & Chat
+cancelSwitchBtn.addEventListener("click", () => {
+  chrome.runtime.sendMessage({
+    action: "stop_automation",
+  });
+
+  updateUI({
+    isRunning: false,
+    currentIndex: 0,
+    statusText: "Switch & Chat automation cancelled by user",
+  });
+});
+
+// 2. Cancel Channel Creation
+cancelCreateBtn.addEventListener("click", () => {
+  chrome.runtime.sendMessage({
+    action: "stop_channel_creation",
+  });
+
+  updateUI({
+    isCreatingChannel: false,
+    statusText: "Channel creation cancelled by user",
+  });
+});
+
+// 3. Cancel Brand Accounts Deletion
+cancelDeleteBtn.addEventListener("click", () => {
   chrome.storage.local.set({
     isDeleting: false,
     isDeletingPaused: false,
-    statusText: "Channel deletion stopped",
+    statusText: "Brand deletion cancelled by user",
   });
 
   chrome.tabs.query({}, (tabs) => {
@@ -399,23 +453,13 @@ stopDeleteBtn.addEventListener("click", async () => {
   updateUI({
     isDeleting: false,
     isDeletingPaused: false,
-    statusText: "Channel deletion stopped",
+    statusText: "Brand deletion cancelled by user",
   });
 });
 
-// Stop Switch & Chat button click handler
-resetBtn.addEventListener("click", async () => {
-  chrome.runtime.sendMessage({
-    action: "stop_automation",
-  });
-
-  updateUI({
-    isRunning: false,
-    isDeleting: false,
-    isCreatingChannel: false,
-    currentIndex: 0,
-    statusText: "Stopped",
-    liveChatUrl: chatUrlInput.value.trim() || DEFAULT_URL,
-  });
+// Clear activity logs button
+clearLogBtn.addEventListener("click", () => {
+  chrome.runtime.sendMessage({ action: "clear_activity_logs" });
+  chrome.storage.local.set({ activityLogs: [] });
+  renderLogs([]);
 });
-

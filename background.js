@@ -24,6 +24,19 @@ const TAB_WATCHDOG_TIMEOUT_MS = 16000;
 const CREATION_WATCHDOG_TIMEOUT_MS = 50000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+async function addActivityLog(message, type = "info") {
+  if (!message) return;
+  const now = new Date();
+  const time = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const entry = { id: Date.now() + "_" + Math.random().toString(36).substring(2, 6), time, message, type };
+  try {
+    const data = await chrome.storage.local.get("activityLogs");
+    const logs = Array.isArray(data.activityLogs) ? data.activityLogs : [];
+    const updated = [entry, ...logs].slice(0, 60);
+    await chrome.storage.local.set({ activityLogs: updated });
+  } catch (e) {}
+}
+
 // Message handling
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender?.tab?.id;
@@ -76,6 +89,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === "channel_out_of_bounds") {
     handleOutOfBounds(tabId);
     sendResponse({ status: "ack" });
+  } else if (message.action === "clear_activity_logs") {
+    chrome.storage.local.set({ activityLogs: [] });
+    sendResponse({ status: "cleared" });
   }
   return true;
 });
@@ -165,6 +181,8 @@ async function handleStartChannelCreation({ channelName, username, count, delayM
     statusText: `Opening ${parallelTotalCount} parallel tab(s) for channel creation...`,
   });
 
+  addActivityLog(`Starting creation of ${parallelTotalCount} channel(s): "${baseName}" (@${baseUsername})`, "info");
+
   // Open all tabs in parallel (staggered slightly for smooth browser loading)
   for (let i = 1; i <= parallelTotalCount; i++) {
     if (!isCreatingChannel) break;
@@ -191,6 +209,7 @@ async function handleStartChannelCreation({ channelName, username, count, delayM
       console.log(`[Background] Launched Parallel Tab ${i}/${parallelTotalCount} (ID: ${tab.id}) for @${handle}`);
     } catch (e) {
       console.error(`[Background] Failed to open tab for batch #${i}:`, e);
+      addActivityLog(`Failed to open tab for batch #${i}: ${e.message}`, "error");
     }
 
     if (i < parallelTotalCount) {
@@ -244,6 +263,7 @@ async function handleChannelCreationStatus(statusMsg) {
     isCreatingChannel: true,
     statusText: statusMsg,
   });
+  addActivityLog(statusMsg, "info");
 }
 
 async function handleChannelCreationSuccess(msg, senderTabId) {
@@ -260,6 +280,7 @@ async function handleChannelCreationSuccess(msg, senderTabId) {
     createBatchCurrent: parallelCompletedCount,
     statusText: `✅ Created ${parallelCompletedCount}/${parallelTotalCount} channels: "${chName}" (@${chHandle})`,
   });
+  addActivityLog(`✅ Created channel #${batchIdx}: "${chName}" (@${chHandle})`, "success");
 
   if (senderTabId) {
     delete parallelCreationJobs[senderTabId];
@@ -272,6 +293,7 @@ async function handleChannelCreationSuccess(msg, senderTabId) {
       isCreatingChannel: false,
       statusText: `🎉 All ${parallelTotalCount} channels created successfully in parallel!`,
     });
+    addActivityLog(`🎉 All ${parallelTotalCount} channels created successfully in parallel!`, "success");
   }
 }
 
@@ -283,6 +305,7 @@ async function handleChannelCreationError(errorMsg, senderTabId) {
   await chrome.storage.local.set({
     statusText: `⚠️ Channel creation error: ${errorMsg}`,
   });
+  addActivityLog(`⚠️ Creation error: ${errorMsg}`, "error");
 }
 
 async function handleStopChannelCreation() {
@@ -293,6 +316,7 @@ async function handleStopChannelCreation() {
     isCreatingChannel: false,
     statusText: "Parallel channel creation stopped.",
   });
+  addActivityLog("Channel creation cancelled by user", "warning");
 }
 
 // ==============================================================
@@ -328,6 +352,8 @@ async function handleStartAutomation({ chatUrl, startIndex, endIndex, delayMs })
     statusText: `Launching Channel #${config.startIndex} (Range: ${config.startIndex} → ${config.endIndex})...`,
   });
 
+  addActivityLog(`Started Switch & Chat: Channels ${config.startIndex} to ${config.endIndex}`, "info");
+
   // Launch initial tab
   await launchTabForIndex(config.startIndex);
 }
@@ -340,6 +366,7 @@ async function launchTabForIndex(index) {
         isRunning: false,
         statusText: `Completed channels ${config.startIndex} to ${config.endIndex}!`,
       });
+      addActivityLog(`Completed channels ${config.startIndex} to ${config.endIndex}!`, "success");
       console.log(`[Background] Finished all channels in range (${config.startIndex} -> ${config.endIndex}).`);
     }
     return;
@@ -356,6 +383,7 @@ async function launchTabForIndex(index) {
     currentIndex: index,
     statusText: `Processing Channel #${index} (${index - config.startIndex + 1}/${config.endIndex - config.startIndex + 1})...`,
   });
+  addActivityLog(`Processing Channel #${index} (${index - config.startIndex + 1}/${config.endIndex - config.startIndex + 1})`, "info");
 
   try {
     const tab = await chrome.tabs.create({
@@ -383,6 +411,7 @@ async function launchTabForIndex(index) {
     };
   } catch (err) {
     console.error(`[Background] Failed to open tab for index ${index}:`, err);
+    addActivityLog(`Failed to open tab for index ${index}: ${err.message}`, "error");
     // Even if tabs.create fails, proceed to next tab after brief sleep so it doesn't hang!
     scheduleNext(index + 1);
   }
@@ -394,6 +423,7 @@ async function handleChannelClicked(tabId, index) {
   const job = activeJobs[tabId];
   console.log(`[Background] Tab ${tabId} reported channel #${index} clicked.`);
   job.channelClicked = true;
+  addActivityLog(`Channel #${index} switched. Redirecting to chat...`, "success");
 
   // Short delay to let YouTube register account switch cookies before navigating to live chat
   setTimeout(() => {
@@ -405,6 +435,7 @@ async function handleChannelClicked(tabId, index) {
 
 async function handleChannelError(tabId, index, errorMsg) {
   console.warn(`[Background] Tab ${tabId} (Channel #${index}) encountered an error: ${errorMsg}`);
+  addActivityLog(`Channel #${index} error: ${errorMsg}`, "error");
   
   if (tabId && activeJobs[tabId]) {
     clearTimeout(activeJobs[tabId].watchdogTimer);
@@ -486,6 +517,7 @@ async function scheduleNext(nextIndex) {
       isRunning: false,
       statusText: `Finished channels ${config.startIndex} to ${config.endIndex}!`,
     });
+    addActivityLog(`Finished channels ${config.startIndex} to ${config.endIndex}!`, "success");
     console.log(`[Background] Automation complete.`);
   }
 }
@@ -506,6 +538,7 @@ async function handleOutOfBounds(tabId) {
     isRunning: false,
     statusText: "Finished (All available channels processed)",
   });
+  addActivityLog("Finished (All available channels processed)", "info");
 }
 
 // ==============================================================
@@ -524,6 +557,7 @@ async function handleStartDeleteChannels() {
     isCreatingChannel: false,
     statusText: "Starting deletion on Google Brand Accounts...",
   });
+  addActivityLog("Starting deletion on Google Brand Accounts...", "info");
 
   try {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -548,6 +582,7 @@ async function handleStartDeleteChannels() {
       isDeletingPaused: false,
       statusText: "Error initializing deletion",
     });
+    addActivityLog(`Error initializing deletion: ${err.message}`, "error");
   }
 }
 
@@ -558,6 +593,7 @@ async function handleResumeDeleteChannels() {
     isDeletingPaused: false,
     statusText: "Resuming channel deletion...",
   });
+  addActivityLog("Resumed Brand Account deletion", "info");
 }
 
 async function handleStopDeleteChannels() {
@@ -567,6 +603,7 @@ async function handleStopDeleteChannels() {
     isDeletingPaused: false,
     statusText: "Channel deletion stopped",
   });
+  addActivityLog("Brand Account deletion cancelled by user", "warning");
 }
 
 async function handleDeleteChannelStatus(statusText) {
@@ -575,6 +612,7 @@ async function handleDeleteChannelStatus(statusText) {
     isDeleting: true,
     statusText,
   });
+  addActivityLog(statusText, "info");
 }
 
 async function handleDeleteChannelsCompleted(count = 0) {
@@ -584,6 +622,7 @@ async function handleDeleteChannelsCompleted(count = 0) {
     isDeletingPaused: false,
     statusText: `All channels deleted (${count} total)!`,
   });
+  addActivityLog(`All brand channels deleted (${count} total)!`, "success");
 }
 
 async function handleDeleteChannelsError(errorMessage) {
@@ -593,10 +632,12 @@ async function handleDeleteChannelsError(errorMessage) {
     isDeletingPaused: false,
     statusText: `Deletion error: ${errorMessage}`,
   });
+  addActivityLog(`Deletion error: ${errorMessage}`, "error");
 }
 
 async function handleStopAutomation() {
   console.log("[Background] All automations stopped.");
+  const wasRunning = isRunning || isCreatingChannel;
   isRunning = false;
   isCreatingChannel = false;
 
@@ -621,4 +662,7 @@ async function handleStopAutomation() {
     isCreatingChannel: false,
     statusText: "Stopped",
   });
+  if (wasRunning) {
+    addActivityLog("Switch & Chat automation cancelled", "warning");
+  }
 }
