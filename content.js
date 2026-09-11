@@ -120,6 +120,8 @@
             "isCreatingChannel",
             "creationCurrentChannelName",
             "creationCurrentHandle",
+            "channelName",
+            "channelUsername",
             "createBatchCurrent",
             "createBatchTotal",
           ],
@@ -142,18 +144,20 @@
 
     if (!isCreateChannel) return;
 
-    // Strict priority: URL hash params (unique per parallel tab) > storage > fallback
+    // Strict priority: URL query/hash params > storage > fallback
     const channelName =
       hashParams.get("channel_name") ||
       searchParams.get("channel_name") ||
       storage?.creationCurrentChannelName ||
-      "Messi";
+      storage?.channelName ||
+      "";
 
     const channelUsername =
       hashParams.get("channel_username") ||
       searchParams.get("channel_username") ||
       storage?.creationCurrentHandle ||
-      "Lion_________________1_Messi";
+      storage?.channelUsername ||
+      "";
 
     const batchIdx =
       parseInt(hashParams.get("batch_idx") || searchParams.get("batch_idx"), 10) ||

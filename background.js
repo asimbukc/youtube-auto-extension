@@ -176,6 +176,10 @@ async function handleStartChannelCreation({ channelName, username, count, delayM
     isCreatingChannel: true,
     isRunning: false,
     isDeleting: false,
+    creationCurrentChannelName: baseName,
+    creationCurrentHandle: baseUsername,
+    channelName: baseName,
+    channelUsername: baseUsername,
     createBatchCurrent: 0,
     createBatchTotal: parallelTotalCount,
     statusText: `Opening ${parallelTotalCount} parallel tab(s) for channel creation...`,
@@ -183,13 +187,16 @@ async function handleStartChannelCreation({ channelName, username, count, delayM
 
   addActivityLog(`Starting creation of ${parallelTotalCount} channel(s): "${baseName}" (@${baseUsername})`, "info");
 
-  // Open all tabs in parallel (staggered slightly for smooth browser loading)
+  // Open all tabs in parallel with the exact same name and handle
   for (let i = 1; i <= parallelTotalCount; i++) {
     if (!isCreatingChannel) break;
 
-    const { name, handle } = computeChannelIdentifiers(baseName, baseUsername, i, parallelTotalCount);
+    const name = baseName;
+    const handle = baseUsername;
 
-    const creationUrl = `https://www.youtube.com/channel_switcher#create_channel=true&channel_name=${encodeURIComponent(
+    const creationUrl = `https://www.youtube.com/channel_switcher?create_channel=true&channel_name=${encodeURIComponent(
+      name
+    )}&channel_username=${encodeURIComponent(handle)}&batch_idx=${i}&batch_total=${parallelTotalCount}#create_channel=true&channel_name=${encodeURIComponent(
       name
     )}&channel_username=${encodeURIComponent(handle)}&batch_idx=${i}&batch_total=${parallelTotalCount}`;
 
@@ -220,40 +227,6 @@ async function handleStartChannelCreation({ channelName, username, count, delayM
   await chrome.storage.local.set({
     statusText: `All ${parallelTotalCount} tabs running in parallel. Creating channels...`,
   });
-}
-
-function incrementIdentifier(template, batchIdx) {
-  if (batchIdx <= 1 || !template) return template;
-  const offset = batchIdx - 1;
-
-  // 1. If template contains {i} or {n}, replace it
-  if (/\{[in]\}/i.test(template)) {
-    return template.replace(/\{[in]\}/gi, () => String(batchIdx));
-  }
-
-  // 2. Check if template contains any number (center, end, anywhere)
-  const numberRegex = /(\d+)/;
-  const match = template.match(numberRegex);
-  if (match) {
-    const originalNumStr = match[1];
-    const originalNum = parseInt(originalNumStr, 10);
-    const newNum = originalNum + offset;
-    const formattedNum = String(newNum).padStart(originalNumStr.length, "0");
-    return template.replace(numberRegex, formattedNum);
-  }
-
-  // 3. If no number is present, append number
-  const separator = template.includes("_") ? "_" : " ";
-  return `${template}${separator}${batchIdx}`;
-}
-
-function computeChannelIdentifiers(baseName, baseHandle, batchIdx, totalBatch) {
-  if (totalBatch <= 1 || batchIdx === 1) {
-    return { name: baseName, handle: baseHandle };
-  }
-  const name = baseName;
-  const handle = incrementIdentifier(baseHandle, batchIdx);
-  return { name, handle };
 }
 
 async function handleChannelCreationStatus(statusMsg) {

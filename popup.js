@@ -326,10 +326,18 @@ startBtn.addEventListener("click", () => {
 
 // Start YouTube Channel Creation
 createChannelBtn.addEventListener("click", () => {
-  const channelName = channelNameInput.value.trim() || "Messi";
-  const username = channelUsernameInput.value.trim() || "Lion_________________1_Messi";
+  const channelName = (channelNameInput.value.trim() || "Messi");
+  const username = (channelUsernameInput.value.trim() || "Lion_________________1_Messi");
   const count = Math.max(1, parseInt(createCountInput.value, 10) || 1);
   const delayMs = Math.max(1000, parseInt(createDelayMsInput.value, 10) || 2500);
+
+  // Persist exact user values to storage so tabs always read user input
+  chrome.storage.local.set({
+    channelName,
+    channelUsername: username,
+    creationCurrentChannelName: channelName,
+    creationCurrentHandle: username,
+  });
 
   chrome.runtime.sendMessage({
     action: "start_channel_creation",
