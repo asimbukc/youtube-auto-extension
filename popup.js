@@ -335,6 +335,8 @@ createChannelBtn.addEventListener("click", () => {
   chrome.storage.local.set({
     channelName,
     channelUsername: username,
+    creationBaseChannelName: channelName,
+    creationBaseUsername: username,
     creationCurrentChannelName: channelName,
     creationCurrentHandle: username,
   });

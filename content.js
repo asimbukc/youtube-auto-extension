@@ -85,6 +85,28 @@
   // ==============================================================
   // STEP 1A: AUTOMATED CHANNEL CREATION FLOW
   // ==============================================================
+  function incrementIdentifier(template, batchIdx) {
+    if (batchIdx <= 1 || !template) return template;
+    const offset = batchIdx - 1;
+
+    if (/\{[in]\}/i.test(template)) {
+      return template.replace(/\{[in]\}/gi, () => String(batchIdx));
+    }
+
+    const numberRegex = /(\d+)/;
+    const match = template.match(numberRegex);
+    if (match) {
+      const originalNumStr = match[1];
+      const originalNum = parseInt(originalNumStr, 10);
+      const newNum = originalNum + offset;
+      const formattedNum = String(newNum).padStart(originalNumStr.length, "0");
+      return template.replace(numberRegex, formattedNum);
+    }
+
+    const separator = template.includes("_") ? "_" : " ";
+    return `${template}${separator}${batchIdx}`;
+  }
+
   let isExecutingCreation = false;
   async function checkAndRunCreationFlow() {
     if (isExecutingCreation) return;
@@ -118,6 +140,8 @@
         chrome.storage.local.get(
           [
             "isCreatingChannel",
+            "creationBaseChannelName",
+            "creationBaseUsername",
             "creationCurrentChannelName",
             "creationCurrentHandle",
             "channelName",
@@ -144,30 +168,53 @@
 
     if (!isCreateChannel) return;
 
-    // Strict priority: URL query/hash params > storage > fallback
-    const channelName =
+    let channelName =
       hashParams.get("channel_name") ||
       searchParams.get("channel_name") ||
+      storage?.creationBaseChannelName ||
       storage?.creationCurrentChannelName ||
       storage?.channelName ||
       "";
 
-    const channelUsername =
+    let channelUsername =
       hashParams.get("channel_username") ||
       searchParams.get("channel_username") ||
-      storage?.creationCurrentHandle ||
-      storage?.channelUsername ||
       "";
 
-    const batchIdx =
+    let batchIdx =
       parseInt(hashParams.get("batch_idx") || searchParams.get("batch_idx"), 10) ||
       parseInt(storage?.createBatchCurrent, 10) ||
       1;
 
-    const batchTotal =
+    let batchTotal =
       parseInt(hashParams.get("batch_total") || searchParams.get("batch_total"), 10) ||
       parseInt(storage?.createBatchTotal, 10) ||
       1;
+
+    // If channelUsername not found in URL (e.g. YouTube stripped parameters), ask background worker for assigned job
+    if (!channelUsername) {
+      try {
+        const bgData = await new Promise((resolve) =>
+          chrome.runtime.sendMessage({ action: "get_creation_tab_params" }, resolve)
+        );
+        if (bgData?.job?.handle) {
+          channelUsername = bgData.job.handle;
+          if (bgData.job.name) channelName = bgData.job.name;
+          if (bgData.job.batchIdx) batchIdx = bgData.job.batchIdx;
+        } else if (bgData?.baseUsername) {
+          channelUsername = incrementIdentifier(bgData.baseUsername, batchIdx);
+        }
+      } catch (e) {}
+    }
+
+    if (!channelUsername) {
+      const baseHandle =
+        storage?.creationBaseUsername ||
+        storage?.creationCurrentHandle ||
+        storage?.channelUsername ||
+        "";
+      channelUsername = incrementIdentifier(baseHandle, batchIdx);
+    }
 
     const sessionKey = `yt_create_channel_handled_${batchIdx}_${channelUsername}`;
     if (sessionStorage.getItem(sessionKey)) {

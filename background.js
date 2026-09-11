@@ -92,6 +92,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === "clear_activity_logs") {
     chrome.storage.local.set({ activityLogs: [] });
     sendResponse({ status: "cleared" });
+  } else if (message.action === "get_creation_tab_params") {
+    const job = tabId && parallelCreationJobs[tabId] ? parallelCreationJobs[tabId] : null;
+    sendResponse({
+      job,
+      baseName: creationConfig.channelName || "Messi",
+      baseUsername: creationConfig.username || "",
+    });
   }
   return true;
 });
@@ -172,10 +179,20 @@ async function handleStartChannelCreation({ channelName, username, count, delayM
     `[Background] Starting Parallel Channel Creation: "${baseName}" (@${baseUsername}), Batch Count: ${parallelTotalCount}`
   );
 
+  creationConfig = {
+    channelName: baseName,
+    username: baseUsername,
+    count: parallelTotalCount,
+    delayMs,
+    currentBatch: 1,
+  };
+
   await chrome.storage.local.set({
     isCreatingChannel: true,
     isRunning: false,
     isDeleting: false,
+    creationBaseChannelName: baseName,
+    creationBaseUsername: baseUsername,
     creationCurrentChannelName: baseName,
     creationCurrentHandle: baseUsername,
     channelName: baseName,
@@ -185,14 +202,14 @@ async function handleStartChannelCreation({ channelName, username, count, delayM
     statusText: `Opening ${parallelTotalCount} parallel tab(s) for channel creation...`,
   });
 
-  addActivityLog(`Starting creation of ${parallelTotalCount} channel(s): "${baseName}" (@${baseUsername})`, "info");
+  addActivityLog(`Starting creation of ${parallelTotalCount} channel(s) from: "${baseName}" (@${baseUsername})`, "info");
 
-  // Open all tabs in parallel with the exact same name and handle
+  // Open all tabs in parallel, incrementing the handle from the user's input
   for (let i = 1; i <= parallelTotalCount; i++) {
     if (!isCreatingChannel) break;
 
     const name = baseName;
-    const handle = baseUsername;
+    const handle = incrementIdentifier(baseUsername, i);
 
     const creationUrl = `https://www.youtube.com/channel_switcher?create_channel=true&channel_name=${encodeURIComponent(
       name
@@ -227,6 +244,31 @@ async function handleStartChannelCreation({ channelName, username, count, delayM
   await chrome.storage.local.set({
     statusText: `All ${parallelTotalCount} tabs running in parallel. Creating channels...`,
   });
+}
+
+function incrementIdentifier(template, batchIdx) {
+  if (batchIdx <= 1 || !template) return template;
+  const offset = batchIdx - 1;
+
+  // 1. If template contains {i} or {n}, replace it
+  if (/\{[in]\}/i.test(template)) {
+    return template.replace(/\{[in]\}/gi, () => String(batchIdx));
+  }
+
+  // 2. Check if template contains any number (center, end, anywhere)
+  const numberRegex = /(\d+)/;
+  const match = template.match(numberRegex);
+  if (match) {
+    const originalNumStr = match[1];
+    const originalNum = parseInt(originalNumStr, 10);
+    const newNum = originalNum + offset;
+    const formattedNum = String(newNum).padStart(originalNumStr.length, "0");
+    return template.replace(numberRegex, formattedNum);
+  }
+
+  // 3. If no number is present, append number
+  const separator = template.includes("_") ? "_" : " ";
+  return `${template}${separator}${batchIdx}`;
 }
 
 async function handleChannelCreationStatus(statusMsg) {
