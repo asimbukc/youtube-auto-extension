@@ -156,7 +156,20 @@
       searchParams.get("create_channel") === "true" ||
       storage?.isCreatingChannel === true;
 
-    if (!isCreateChannel) return;
+    // Wait until the tab actually becomes active/visible before processing
+    // This perfectly matches the requested sequential "focus-cycling" strategy.
+    const waitForFocus = async () => {
+      if (!document.hidden) return;
+      return new Promise((resolve) => {
+        const onVisibilityChange = () => {
+          if (!document.hidden) {
+            document.removeEventListener("visibilitychange", onVisibilityChange);
+            resolve();
+          }
+        };
+        document.addEventListener("visibilitychange", onVisibilityChange);
+      });
+    };
 
     let channelName =
       hashParams.get("channel_name") ||
@@ -224,7 +237,10 @@
       } catch (e) {}
     };
 
-    logCreationStatus(`Initializing channel creation (${batchIdx}/${batchTotal}): "${channelName}" (@${channelUsername})...`);
+    logCreationStatus(`Waiting for focus to initialize channel creation (${batchIdx}/${batchTotal}): "${channelName}" (@${channelUsername})...`);
+    await waitForFocus();
+    
+    logCreationStatus(`Tab active! Initializing channel creation (${batchIdx}/${batchTotal}): "${channelName}" (@${channelUsername})...`);
     await waitForPageReady();
     await sleep(1000);
 

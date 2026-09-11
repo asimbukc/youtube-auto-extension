@@ -214,6 +214,7 @@ async function handleStartChannelCreation({ channelName, username, count }) {
   nextBatchStartIdx = 1;
   batchTabMap = {};
   currentBatchTabIds = new Set();
+  orderedBatchTabIds = [];
 
   const totalCount = Math.max(1, parseInt(count, 10) || 1);
   const baseName = (channelName || "Messi").trim();
@@ -271,6 +272,7 @@ async function launchBatch(batchStartIdx) {
   nextBatchStartIdx = batchEnd + 1; // remember where next batch will start
   batchTabMap = {};
   currentBatchTabIds = new Set();
+  orderedBatchTabIds = [];
   batchCompletionTriggered = false; // reset guard for this new batch
 
   console.log(`[Background] Launching batch: Channels #${batchStartIdx} to #${batchEnd} (${batchSize} tabs staggered)`);
@@ -283,7 +285,8 @@ async function launchBatch(batchStartIdx) {
   // Create tabs with a short stagger so YouTube doesn't throttle background tab loading.
   // First tab opens active so Chrome allocates full resources to it immediately.
   for (let idx = batchStartIdx; idx <= batchEnd; idx++) {
-    await openSingleCreationTab(idx, idx === batchStartIdx);
+    const tabId = await openSingleCreationTab(idx, idx === batchStartIdx);
+    if (tabId) orderedBatchTabIds.push(tabId);
     if (idx < batchEnd) await sleep(500); // stagger between tabs
   }
 
@@ -312,10 +315,9 @@ async function openSingleCreationTab(batchIdx, isFirstInBatch = false) {
     const tab = await chrome.tabs.create({ url: creationUrl, active: isFirstInBatch });
     const tabId = tab.id;
 
-    // Per-tab watchdog
-    const watchdogTimer = setTimeout(() => {
-      handleBatchTabTimeout(tabId, batchIdx);
-    }, CREATION_WATCHDOG_TIMEOUT_MS);
+    // Per-tab watchdog explicitly removed as requested. 
+    // Tabs will wait patiently for focus indefinitely instead of timing out while in queue.
+    const watchdogTimer = null;
 
     batchTabMap[tabId] = {
       batchIdx,
@@ -327,6 +329,7 @@ async function openSingleCreationTab(batchIdx, isFirstInBatch = false) {
     currentBatchTabIds.add(tabId);
 
     addActivityLog(`Tab opened for Channel #${batchIdx} (@${handle})`, "info");
+    return tabId;
   } catch (err) {
     console.error(`[Background] Failed to open tab for Channel #${batchIdx}:`, err);
     addActivityLog(`Failed to open tab for Channel #${batchIdx}: ${err.message}`, "error");
@@ -336,6 +339,7 @@ async function openSingleCreationTab(batchIdx, isFirstInBatch = false) {
     batchTabMap[fakeId] = { batchIdx, done: true, error: true };
     currentBatchTabIds.add(fakeId);
     checkBatchCompletion();
+    return fakeId;
   }
 }
 
@@ -394,6 +398,18 @@ function markBatchTabDone(tabId, success) {
     entry.watchdogTimer = null;
   }
   entry.done = true;
+
+  // Switch focus to the next tab in the batch!
+  if (orderedBatchTabIds && orderedBatchTabIds.length > 0) {
+    const currentIndex = orderedBatchTabIds.indexOf(tabId);
+    if (currentIndex >= 0 && currentIndex < orderedBatchTabIds.length - 1) {
+      const nextTabId = orderedBatchTabIds[currentIndex + 1];
+      if (typeof nextTabId === "number") {
+        console.log(`[Background] Tab ${tabId} done. Switching focus to next tab ${nextTabId}`);
+        chrome.tabs.update(nextTabId, { active: true }).catch(() => {});
+      }
+    }
+  }
 
   checkBatchCompletion();
 }
@@ -511,6 +527,7 @@ async function handleStopChannelCreation() {
 
   batchTabMap = {};
   currentBatchTabIds = new Set();
+  orderedBatchTabIds = [];
 
   await chrome.storage.local.set({
     isCreatingChannel: false,
