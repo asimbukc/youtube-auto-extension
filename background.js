@@ -295,16 +295,16 @@ async function openSingleCreationTab(batchIdx, isFirstInBatch = false) {
   const name = creationConfig.channelName;
   const handle = incrementIdentifier(creationConfig.username, batchIdx);
 
-  // Encode ALL params in the hash so content.js knows exactly what to fill
-  // without any background.js round-trip (which was the source of the stall bug)
-  const hashParams = new URLSearchParams({
-    auto_create: "true",
+  // Encode ALL params in the QUERY STRING so they survive YouTube's 302 redirects
+  // (YouTube strips hash fragments during auth/channel redirects)
+  const queryParams = new URLSearchParams({
+    create_channel: "true",
     batch_idx: String(batchIdx),
     batch_total: String(creationConfig.count),
     channel_name: name,
     channel_username: handle,
   });
-  const creationUrl = `https://www.youtube.com/channel_switcher#${hashParams.toString()}`;
+  const creationUrl = `https://www.youtube.com/channel_switcher?${queryParams.toString()}`;
 
   console.log(`[Background] Opening tab for Channel #${batchIdx}/${creationConfig.count}: "${name}" (@${handle})`);
 

@@ -1,4 +1,11 @@
 (async function init() {
+  // ⚠️ Capture the URL hash SYNCHRONOUSLY right now — before any await.
+  // YouTube's SPA router strips custom hash params during page hydration.
+  // By the time any async code runs, window.location.hash may already be empty.
+  const _rawHash = window.location.hash || "";
+  const _savedHash = _rawHash.startsWith("#") ? _rawHash.substring(1) : _rawHash;
+  const INITIAL_HASH_PARAMS = new URLSearchParams(_savedHash);
+
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   // Deep recursive query selector across Shadow DOM and accessible iframe boundaries
@@ -138,11 +145,9 @@
       );
     } catch (e) {}
 
-    const hash = window.location.hash.startsWith("#")
-      ? window.location.hash.substring(1)
-      : window.location.hash;
-
-    const hashParams = new URLSearchParams(hash);
+    // Use the hash params captured synchronously at script start.
+    // DO NOT re-read window.location.hash here — YouTube may have already cleared it.
+    const hashParams = INITIAL_HASH_PARAMS;
     const searchParams = new URLSearchParams(window.location.search);
 
     const isCreateChannel =
@@ -317,9 +322,14 @@
       // 4. Locate Channel Name & Handle input fields distinctly
       logCreationStatus(`[3/5] Locating Name and Handle input fields in creation dialog...`);
       const { nameInput, usernameInput } = await waitForDeep(() => {
-        // In background (inactive) tabs, offsetParent and getBoundingClientRect return zero —
-        // so we NEVER use visibility checks here. We just exclude non-interactive input types.
-        const isUsable = (i) => i && i.type !== "file" && i.type !== "hidden" && i.type !== "submit";
+        // In background (inactive) tabs, offsetParent and getBoundingClientRect return zero.
+        // Instead of layout checks, we check DOM attributes for explicit hidden state.
+        const isUsable = (i) => {
+          if (!i || i.type === "file" || i.type === "hidden" || i.type === "submit") return false;
+          // Reject elements explicitly hidden in the DOM
+          if (i.closest("[hidden]") || i.closest('[style*="display: none"]')) return false;
+          return true;
+        };
 
         // Find the creation dialog (don't gate on visibility — background tabs always return 0)
         const dialogs = querySelectorDeep(
@@ -327,47 +337,72 @@
         );
         const activeDialog = dialogs[0] || document;
 
-        // Try specific selectors in the dialog first
-        let nInput = querySelectorDeep(
-          '#name-input input, tp-yt-paper-input#name-input input, [id*="name" i] input, tp-yt-paper-input[aria-label*="name" i] input',
+        // Collect all usable inputs in the dialog
+        const allInputs = querySelectorDeep(
+          'tp-yt-paper-input input, paper-input input, input#input, input[type="text"]',
           activeDialog
-        ).find(isUsable);
+        ).filter(isUsable);
 
-        let uInput = querySelectorDeep(
-          '#handle-input input, tp-yt-paper-input#handle-input input, [id*="handle" i] input, tp-yt-paper-input[aria-label*="handle" i] input',
-          activeDialog
-        ).find(isUsable);
+        // Fallback: search whole document if dialog empty
+        const docInputs = allInputs.length > 0 ? allInputs : querySelectorDeep(
+          'tp-yt-paper-input input, paper-input input, input#input, input[type="text"]'
+        ).filter(isUsable);
 
-        // Fallback: search whole document
-        if (!nInput) {
-          nInput = querySelectorDeep(
-            '#name-input input, tp-yt-paper-input#name-input input, [id*="name" i] input, tp-yt-paper-input[aria-label*="name" i] input'
-          ).find(isUsable);
-        }
-        if (!uInput) {
-          uInput = querySelectorDeep(
-            '#handle-input input, tp-yt-paper-input#handle-input input, [id*="handle" i] input, tp-yt-paper-input[aria-label*="handle" i] input'
-          ).find(isUsable);
-        }
+        // Helper to get text associated with an input
+        const getInputLabelText = (inp) => {
+          let text = (inp.getAttribute("aria-label") || "").toLowerCase();
+          const labelId = inp.getAttribute("aria-labelledby");
+          if (labelId) {
+            const root = inp.getRootNode && inp.getRootNode() !== document ? inp.getRootNode() : document;
+            const labelEl = root.getElementById(labelId) || document.getElementById(labelId);
+            if (labelEl) text += " " + (labelEl.textContent || "").toLowerCase();
+          }
+          // Also check parent wrappers
+          const parentPaper = inp.closest("tp-yt-paper-input, paper-input");
+          if (parentPaper) {
+            text += " " + (parentPaper.getAttribute("aria-label") || "").toLowerCase();
+            const labelNode = parentPaper.querySelector("label");
+            if (labelNode) text += " " + (labelNode.textContent || "").toLowerCase();
+          }
+          return text;
+        };
 
-        // Last resort: grab first two text inputs in the dialog
-        if (!nInput || !uInput || nInput === uInput) {
-          const allInputs = querySelectorDeep(
-            'tp-yt-paper-input input, paper-input input, input#input, input[type="text"]',
-            activeDialog
-          ).filter(isUsable);
-          const docInputs = allInputs.length >= 2 ? allInputs : querySelectorDeep(
-            'tp-yt-paper-input input, paper-input input, input#input, input[type="text"]'
-          ).filter(isUsable);
+        // Score inputs
+        let bestName = null, nameScore = -1;
+        let bestHandle = null, handleScore = -1;
+
+        docInputs.forEach((inp) => {
+          const text = getInputLabelText(inp);
+          let nScore = 0, hScore = 0;
+
+          if (text.includes("name")) nScore += 10;
+          if (text.includes("channel name")) nScore += 10;
+          if (inp.id && inp.id.toLowerCase().includes("name")) nScore += 5;
+
+          if (text.includes("handle")) hScore += 10;
+          if (text.includes("@")) hScore += 10;
+          if (inp.id && inp.id.toLowerCase().includes("handle")) hScore += 5;
+
+          // If no strong label, rely on index as fallback
+          if (nScore === 0 && hScore === 0) {
+            const idx = docInputs.indexOf(inp);
+            if (idx === 0) nScore += 1;
+            if (idx === 1) hScore += 1;
+          }
+
+          if (nScore > nameScore) { nameScore = nScore; bestName = inp; }
+          if (hScore > handleScore) { handleScore = hScore; bestHandle = inp; }
+        });
+
+        // Ensure they aren't the same input if both are found
+        if (bestName && bestHandle && bestName === bestHandle) {
           if (docInputs.length >= 2) {
-            nInput = nInput || docInputs[0];
-            uInput = uInput || docInputs[1];
-          } else if (docInputs.length === 1) {
-            nInput = nInput || docInputs[0];
+            bestName = docInputs[0];
+            bestHandle = docInputs[1];
           }
         }
 
-        if (nInput) return { nameInput: nInput, usernameInput: uInput };
+        if (bestName) return { nameInput: bestName, usernameInput: bestHandle };
         return null;
       }, 25000);
 
