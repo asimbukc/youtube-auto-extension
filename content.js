@@ -35,29 +35,22 @@
   // Clean, single click without duplicate events
   const smartClick = async (el) => {
     if (!el) return;
-    const btn = el.tagName === "BUTTON" ? el : el.closest("button") || el;
-    btn.scrollIntoView({ behavior: "instant", block: "center" });
-    btn.focus();
-    await sleep(100);
-
-    const rect = btn.getBoundingClientRect();
-    const x = Math.max(1, rect.left + rect.width / 2);
-    const y = Math.max(1, rect.top + rect.height / 2);
+    el.scrollIntoView({ behavior: "instant", block: "center" });
+    el.focus();
+    await sleep(80);
 
     const eventOptions = {
       bubbles: true,
       cancelable: true,
       composed: true,
       view: window,
-      clientX: x,
-      clientY: y,
     };
 
-    btn.dispatchEvent(new PointerEvent("pointerdown", eventOptions));
-    btn.dispatchEvent(new MouseEvent("mousedown", eventOptions));
-    btn.dispatchEvent(new PointerEvent("pointerup", eventOptions));
-    btn.dispatchEvent(new MouseEvent("mouseup", eventOptions));
-    btn.click();
+    el.dispatchEvent(new PointerEvent("pointerdown", eventOptions));
+    el.dispatchEvent(new MouseEvent("mousedown", eventOptions));
+    el.dispatchEvent(new PointerEvent("pointerup", eventOptions));
+    el.dispatchEvent(new MouseEvent("mouseup", eventOptions));
+    el.click();
   };
 
   // Wait for dynamic element condition
@@ -114,18 +107,9 @@
 
     const currentUrl = window.location.href;
 
-    // Auto-recover from signin_prompt if redirected by YouTube
+    // Handle signin_prompt without infinite redirect loop
     if (currentUrl.includes("youtube.com/signin_prompt")) {
-      try {
-        const storage = await new Promise((resolve) =>
-          chrome.storage.local.get(["isCreatingChannel"], resolve)
-        );
-        if (storage?.isCreatingChannel) {
-          console.log("[YT Creator] signin_prompt page detected. Redirecting to clean channel_switcher...");
-          window.location.href = "https://www.youtube.com/channel_switcher";
-          return;
-        }
-      } catch (e) {}
+      console.warn("[YT Creator] signin_prompt page detected. User may need to sign in to YouTube.");
       return;
     }
 
@@ -162,6 +146,7 @@
     const searchParams = new URLSearchParams(window.location.search);
 
     const isCreateChannel =
+      hashParams.get("auto_create") === "true" ||
       hashParams.get("create_channel") === "true" ||
       searchParams.get("create_channel") === "true" ||
       storage?.isCreatingChannel === true;
@@ -216,14 +201,7 @@
       channelUsername = incrementIdentifier(baseHandle, batchIdx);
     }
 
-    const sessionKey = `yt_create_channel_handled_${batchIdx}_${channelUsername}`;
-    if (sessionStorage.getItem(sessionKey)) {
-      console.log(`[YT Creator] Parallel creation for batch #${batchIdx} (@${channelUsername}) already executed on this tab.`);
-      return;
-    }
-
     isExecutingCreation = true;
-    sessionStorage.setItem(sessionKey, "true");
 
     const logCreationStatus = (msg) => {
       console.log(`[YT Creator] ${msg}`);
@@ -246,47 +224,33 @@
     await sleep(1000);
 
     try {
-      logCreationStatus(`[Step 1/5] Locating "Create a channel" button...`);
+      logCreationStatus(`[1/5] Locating "Create a channel" button...`);
 
-      // 2. Click "Create a channel" link/button
+      // 1. Click "Create a channel"
       const createChannelLink = await waitForDeep(() => {
-        const candidates = querySelectorDeep(
-          'a[aria-label*="Create a channel" i], a[href*="create_channel"], a[href*="channel_creation"], ytd-button-renderer a, yt-button-shape a, button, a, [role="button"], tp-yt-paper-icon-item, tp-yt-paper-item'
+        const links = querySelectorDeep(
+          'a[aria-label="Create a channel"], a[href*="create_channel"], a[href*="channel_creation"], ytd-button-renderer a, yt-button-shape a, yt-button-shape button'
         );
-        return candidates.find((el) => {
+        return links.find((el) => {
           const label = (el.getAttribute("aria-label") || "").toLowerCase();
           const text = (el.textContent || "").trim().toLowerCase();
-          const href = (el.getAttribute("href") || "").toLowerCase();
-          const isVisible = el.offsetParent !== null || el.getBoundingClientRect().width > 0;
-          if (!isVisible) return false;
           return (
-            label.includes("create a channel") ||
-            label.includes("create channel") ||
+            label === "create a channel" ||
             text === "create a channel" ||
             text.includes("create a channel") ||
-            text === "create channel" ||
-            href.includes("create_channel") ||
-            href.includes("channel_creation")
+            el.href?.includes("channel_creation") ||
+            el.href?.includes("create_channel")
           );
         });
-      }, 20000);
+      }, 25000);
 
       if (!createChannelLink) {
         throw new Error('Could not find "Create a channel" button on channel switcher page.');
       }
 
-      logCreationStatus(`[Step 2/5] Clicking "Create a channel" button...`);
+      logCreationStatus(`[2/5] Clicking "Create a channel" button...`);
       await smartClick(createChannelLink);
-
-      // 3. Wait for modal to appear
-      logCreationStatus(`[Step 3/5] Waiting for creation modal to appear...`);
-      await waitForDeep(() => {
-        const dialogs = querySelectorDeep(
-          'ytd-channel-creation-dialog-renderer, tp-yt-paper-dialog, [role="dialog"], #dialog'
-        );
-        return dialogs.find((d) => d.offsetParent !== null || d.getBoundingClientRect().width > 0);
-      }, 15000);
-      await sleep(1000);
+      await sleep(2500);
 
       // Helper for reliable input typing across Polymer / Lit / React
       const typeIntoInput = async (inputEl, text) => {
@@ -351,51 +315,61 @@
       };
 
       // 4. Locate Channel Name & Handle input fields distinctly
-      logCreationStatus(`[Step 4/5] Locating Name and Handle input fields in creation dialog...`);
+      logCreationStatus(`[3/5] Locating Name and Handle input fields in creation dialog...`);
       const { nameInput, usernameInput } = await waitForDeep(() => {
+        // In background (inactive) tabs, offsetParent and getBoundingClientRect return zero —
+        // so we NEVER use visibility checks here. We just exclude non-interactive input types.
+        const isUsable = (i) => i && i.type !== "file" && i.type !== "hidden" && i.type !== "submit";
+
+        // Find the creation dialog (don't gate on visibility — background tabs always return 0)
         const dialogs = querySelectorDeep(
           'ytd-channel-creation-dialog-renderer, tp-yt-paper-dialog, [role="dialog"], #dialog'
         );
-        const activeDialog = dialogs.find(
-          (d) => d.offsetParent !== null || d.getBoundingClientRect().width > 0
-        ) || document;
+        const activeDialog = dialogs[0] || document;
 
-        const allInputs = querySelectorDeep(
-          'tp-yt-paper-input input, paper-input input, input#input, input[type="text"], input.tp-yt-paper-input',
-          activeDialog
-        ).filter((inp) => {
-          const isVisible = inp.offsetParent !== null || inp.getBoundingClientRect().width > 0;
-          const isFileInput = inp.type === "file";
-          const isHidden = inp.type === "hidden";
-          return isVisible && !isFileInput && !isHidden;
-        });
-
-        // Look for specific containers or labels
+        // Try specific selectors in the dialog first
         let nInput = querySelectorDeep(
           '#name-input input, tp-yt-paper-input#name-input input, [id*="name" i] input, tp-yt-paper-input[aria-label*="name" i] input',
           activeDialog
-        ).find((i) => i.offsetParent !== null || i.getBoundingClientRect().width > 0);
+        ).find(isUsable);
 
         let uInput = querySelectorDeep(
           '#handle-input input, tp-yt-paper-input#handle-input input, [id*="handle" i] input, tp-yt-paper-input[aria-label*="handle" i] input',
           activeDialog
-        ).find((i) => i.offsetParent !== null || i.getBoundingClientRect().width > 0);
+        ).find(isUsable);
 
-        // If specific query didn't find both distinct inputs, use ordered inputs list
+        // Fallback: search whole document
+        if (!nInput) {
+          nInput = querySelectorDeep(
+            '#name-input input, tp-yt-paper-input#name-input input, [id*="name" i] input, tp-yt-paper-input[aria-label*="name" i] input'
+          ).find(isUsable);
+        }
+        if (!uInput) {
+          uInput = querySelectorDeep(
+            '#handle-input input, tp-yt-paper-input#handle-input input, [id*="handle" i] input, tp-yt-paper-input[aria-label*="handle" i] input'
+          ).find(isUsable);
+        }
+
+        // Last resort: grab first two text inputs in the dialog
         if (!nInput || !uInput || nInput === uInput) {
-          if (allInputs.length >= 2) {
-            nInput = allInputs[0];
-            uInput = allInputs[1];
-          } else if (allInputs.length === 1) {
-            nInput = allInputs[0];
+          const allInputs = querySelectorDeep(
+            'tp-yt-paper-input input, paper-input input, input#input, input[type="text"]',
+            activeDialog
+          ).filter(isUsable);
+          const docInputs = allInputs.length >= 2 ? allInputs : querySelectorDeep(
+            'tp-yt-paper-input input, paper-input input, input#input, input[type="text"]'
+          ).filter(isUsable);
+          if (docInputs.length >= 2) {
+            nInput = nInput || docInputs[0];
+            uInput = uInput || docInputs[1];
+          } else if (docInputs.length === 1) {
+            nInput = nInput || docInputs[0];
           }
         }
 
-        if (nInput) {
-          return { nameInput: nInput, usernameInput: uInput };
-        }
+        if (nInput) return { nameInput: nInput, usernameInput: uInput };
         return null;
-      }, 20000);
+      }, 25000);
 
       if (!nameInput) {
         throw new Error("Could not locate Channel Name input field.");
@@ -422,31 +396,35 @@
       logCreationStatus(`[Step 5/5] Locating and clicking final "Create channel" button...`);
       const finalCreateButton = await waitForDeep(() => {
         const buttons = querySelectorDeep(
-          'button.ytSpecButtonShapeNextHost[aria-label="Create channel"], button[aria-label="Create channel"], ytd-channel-creation-dialog-renderer button, button'
+          'button.ytSpecButtonShapeNextHost[aria-label*="Create channel" i], button[aria-label*="Create channel" i], button[aria-label*="Create a channel" i], ytd-channel-creation-dialog-renderer button, button'
         );
         return buttons.find((btn) => {
           const label = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
           const text = (btn.textContent || "").trim().toLowerCase();
           const isMatch =
-            label === "create channel" ||
-            text === "create channel" ||
-            text.includes("create channel");
-
-          const isVisible =
-            btn.offsetParent !== null ||
-            btn.getBoundingClientRect().width > 0;
-
+            label.includes("create channel") ||
+            label.includes("create a channel") ||
+            text.includes("create channel") ||
+            text.includes("create a channel");
+          // Don't gate on visibility — background tabs return 0 for all layout metrics
           const isEnabled =
             btn.getAttribute("aria-disabled") !== "true" &&
             !btn.hasAttribute("disabled");
-
-          return isMatch && isVisible && isEnabled;
+          return isMatch && isEnabled;
         });
       }, 20000);
 
       if (!finalCreateButton) {
         throw new Error('Final "Create channel" submit button was not enabled or found.');
       }
+
+      // Notify background that the form is being submitted so it can monitor for post-submit navigation
+      try {
+        chrome.runtime.sendMessage({
+          action: "channel_creation_submitted",
+          batchIdx,
+        });
+      } catch (e) {}
 
       // Get live spatial coordinates to avoid scale(Infinity) animation errors
       const rect = finalCreateButton.getBoundingClientRect();
@@ -507,9 +485,7 @@
         const dialogs = querySelectorDeep(
           'ytd-channel-creation-dialog-renderer, tp-yt-paper-dialog, [role="dialog"]'
         );
-        const activeDialog = dialogs.find(
-          (d) => d.offsetParent !== null && d.getBoundingClientRect().width > 0
-        );
+        const activeDialog = dialogs[0]; // don't gate on visibility — background tabs return 0
 
         if (activeDialog) {
           const errorEl = activeDialog.querySelector(

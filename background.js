@@ -6,23 +6,31 @@ let creationConfig = {
   channelName: "Messi",
   username: "Lion_________________1_Messi",
   count: 1,
-  delayMs: 2500,
-  currentBatch: 1,
 };
-let creationActiveTabId = null;
-let creationActiveBatchIdx = 1;
-let creationRedirectHandled = false;
-let creationWatchdogTimer = null;
+
+// Batched-parallel creation state
+// batchTabMap: { [tabId]: { batchIdx, watchdogTimer, done } }
+let batchTabMap = {};
+// Set of all tab IDs in the current running batch
+let currentBatchTabIds = new Set();
+// Global completed count across all batches
 let creationCompletedCount = 0;
+// The batchIdx where the next batch will start (1-based)
+let nextBatchStartIdx = 1;
+// Guard: prevents checkBatchCompletion from firing multiple times concurrently
+let batchCompletionTriggered = false;
+
+const BATCH_SIZE = 5;
 
 let activeJobs = {}; // tabId -> job data & watchdog timer
 let config = {
   chatUrl: "https://www.youtube.com/live_chat?is_popout=1&v=5FW9ZVMR_7M",
   startIndex: 0,
   endIndex: 19,
-  delayMs: 1000,
 };
 
+const AUTOMATION_STEP_DELAY_MS = 1000;
+const CREATION_STEP_DELAY_MS = 1500;
 const TAB_WATCHDOG_TIMEOUT_MS = 16000;
 const CREATION_WATCHDOG_TIMEOUT_MS = 50000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -58,6 +66,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ status: "stopped_channel_creation" });
   } else if (message.action === "channel_creation_status") {
     handleChannelCreationStatus(message.statusText);
+    sendResponse({ status: "ack" });
+  } else if (message.action === "channel_creation_submitted") {
+    // Mark the specific tab as having submitted its form so we can watch for redirect
+    if (tabId && batchTabMap[tabId]) {
+      batchTabMap[tabId].formSubmitted = true;
+    }
+    console.log(`[Background] Channel creation form submitted for Channel #${message.batchIdx} (tab ${tabId}).`);
     sendResponse({ status: "ack" });
   } else if (message.action === "channel_creation_success") {
     handleChannelCreationSuccess(message, tabId);
@@ -96,10 +111,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.storage.local.set({ activityLogs: [] });
     sendResponse({ status: "cleared" });
   } else if (message.action === "get_creation_tab_params") {
-    const handle = incrementIdentifier(creationConfig.username, creationActiveBatchIdx);
+    // Return the batchIdx specifically assigned to the requesting tab (not a global one)
+    const requestingTabId = tabId;
+    const tabEntry = batchTabMap[requestingTabId];
+    const assignedIdx = tabEntry ? tabEntry.batchIdx : nextBatchStartIdx;
+    const handle = incrementIdentifier(creationConfig.username, assignedIdx);
     sendResponse({
       job: {
-        batchIdx: creationActiveBatchIdx,
+        batchIdx: assignedIdx,
         name: creationConfig.channelName,
         handle,
       },
@@ -115,31 +134,36 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (activeJobs[tabId]) {
     handleTabClosed(tabId);
   }
-  if (creationActiveTabId === tabId) {
-    handleCreationTabClosed();
-  }
+  // NOTE: We intentionally do NOT mark batch tabs done here.
+  // Closing all batch tabs is done inside checkBatchCompletion itself, and doing it
+  // here would re-trigger checkBatchCompletion for in-progress tabs (race condition).
+  // Hung/user-closed tabs are handled by per-tab watchdog timers instead.
 });
 
-// Intercept YouTube navigation and redirect to Live Chat URL for switcher jobs or recover from signin_prompt
+// Intercept YouTube navigation and redirect to Live Chat URL for switcher jobs or detect post-submit redirect
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  // If YouTube kicks to signin_prompt during creation, bounce back immediately to channel_switcher
-  if (isCreatingChannel && tabId === creationActiveTabId && tab.url && tab.url.includes("signin_prompt")) {
-    console.log(`[Background] Detected signin_prompt during channel creation. Redirecting cleanly to channel_switcher...`);
-    chrome.tabs.update(tabId, { url: "https://www.youtube.com/channel_switcher" });
+  // If YouTube kicks to signin_prompt during creation, log warning without redirect loop
+  if (isCreatingChannel && batchTabMap[tabId] && tab.url && tab.url.includes("signin_prompt")) {
+    console.warn(`[Background] Detected signin_prompt on creation tab ${tabId}. User may need to sign in.`);
+    addActivityLog("YouTube session requires sign-in. Please sign in to YouTube.", "warning");
     return;
   }
 
-  // Detect redirect after channel creation: once active creation tab navigates away from channel_switcher
-  if (isCreatingChannel && tabId === creationActiveTabId && !creationRedirectHandled) {
-    if (
-      tab.url &&
-      !tab.url.includes("channel_switcher") &&
-      !tab.url.includes("signin_prompt")
-    ) {
-      console.log(`[Background] Creation tab ${tabId} started redirecting to: ${tab.url}. Channel creation confirmed!`);
-      handleCreationSuccessOrRedirect(tabId);
-      return;
-    }
+  // Detect post-submit redirect for any batch tab whose form was submitted
+  const batchEntry = batchTabMap[tabId];
+  if (
+    isCreatingChannel &&
+    batchEntry &&
+    batchEntry.formSubmitted &&
+    !batchEntry.redirectHandled &&
+    tab.url &&
+    !tab.url.includes("channel_switcher") &&
+    !tab.url.includes("signin_prompt")
+  ) {
+    console.log(`[Background] Batch tab ${tabId} (Channel #${batchEntry.batchIdx}) confirmed redirect after submit to: ${tab.url}`);
+    batchEntry.redirectHandled = true;
+    handleBatchTabSuccess(tabId, batchEntry.batchIdx);
+    return;
   }
 
   if (!activeJobs[tabId]) return;
@@ -177,32 +201,32 @@ function isChatOrTargetUrl(currentUrl, targetUrl) {
 }
 
 // ==============================================================
-// SEQUENTIAL CHANNEL CREATION ORCHESTRATION
-// (Creates 1 channel at a time, waits for redirect/confirmation before opening the next)
+// BATCHED-PARALLEL CHANNEL CREATION ORCHESTRATION
+// Opens up to BATCH_SIZE (5) tabs at once. Waits for ALL in the batch to finish,
+// then closes them all and moves to the next batch.
 // ==============================================================
 
-async function handleStartChannelCreation({ channelName, username, count, delayMs }) {
+async function handleStartChannelCreation({ channelName, username, count }) {
   handleStopAutomation(); // Reset any other ongoing processes
 
   isCreatingChannel = true;
   creationCompletedCount = 0;
-  creationActiveBatchIdx = 1;
-  creationRedirectHandled = false;
+  nextBatchStartIdx = 1;
+  batchTabMap = {};
+  currentBatchTabIds = new Set();
 
   const totalCount = Math.max(1, parseInt(count, 10) || 1);
   const baseName = (channelName || "Messi").trim();
   const baseUsername = (username || "Lion_________________1_Messi").trim();
-  const waitDelay = Math.max(1000, parseInt(delayMs, 10) || 2500);
 
   creationConfig = {
     channelName: baseName,
     username: baseUsername,
     count: totalCount,
-    delayMs: waitDelay,
   };
 
   console.log(
-    `[Background] Starting Sequential Channel Creation: "${baseName}" (@${baseUsername}), Total: ${totalCount}, Delay: ${waitDelay}ms`
+    `[Background] Starting Batched Channel Creation: "${baseName}" (@${baseUsername}), Total: ${totalCount}, Batch size: ${BATCH_SIZE}`
   );
 
   await chrome.storage.local.set({
@@ -213,17 +237,21 @@ async function handleStartChannelCreation({ channelName, username, count, delayM
     creationBaseUsername: baseUsername,
     createBatchCurrent: 0,
     createBatchTotal: totalCount,
-    statusText: `Initializing channel creation (1/${totalCount})...`,
+    statusText: `Initializing channel creation batch (1-${Math.min(BATCH_SIZE, totalCount)}/${totalCount})...`,
   });
 
-  addActivityLog(`Starting sequential channel creation (1 to ${totalCount}): "${baseName}" (@${baseUsername})`, "info");
+  addActivityLog(`Starting batched channel creation (1 to ${totalCount}): "${baseName}" (@${baseUsername})`, "info");
 
-  // Launch the first channel tab
-  await launchCreationTab(1);
+  // Launch the first batch
+  await launchBatch(1);
 }
 
-async function launchCreationTab(batchIdx) {
-  if (!isCreatingChannel || batchIdx > creationConfig.count) {
+/**
+ * Launch up to BATCH_SIZE tabs starting from batchStartIdx.
+ * e.g. launchBatch(1) opens indices 1-5, launchBatch(6) opens 6-10, etc.
+ */
+async function launchBatch(batchStartIdx) {
+  if (!isCreatingChannel || batchStartIdx > creationConfig.count) {
     if (isCreatingChannel) {
       isCreatingChannel = false;
       await chrome.storage.local.set({
@@ -237,123 +265,176 @@ async function launchCreationTab(batchIdx) {
     return;
   }
 
-  creationActiveBatchIdx = batchIdx;
-  creationRedirectHandled = false;
+  const batchEnd = Math.min(batchStartIdx + BATCH_SIZE - 1, creationConfig.count);
+  const batchSize = batchEnd - batchStartIdx + 1;
 
+  nextBatchStartIdx = batchEnd + 1; // remember where next batch will start
+  batchTabMap = {};
+  currentBatchTabIds = new Set();
+  batchCompletionTriggered = false; // reset guard for this new batch
+
+  console.log(`[Background] Launching batch: Channels #${batchStartIdx} to #${batchEnd} (${batchSize} tabs staggered)`);
+  addActivityLog(`Opening batch: Channels #${batchStartIdx}–#${batchEnd} simultaneously`, "info");
+
+  await chrome.storage.local.set({
+    statusText: `Opening ${batchSize} tabs (Channels #${batchStartIdx}–#${batchEnd} / ${creationConfig.count})...`,
+  });
+
+  // Create tabs with a short stagger so YouTube doesn't throttle background tab loading.
+  // First tab opens active so Chrome allocates full resources to it immediately.
+  for (let idx = batchStartIdx; idx <= batchEnd; idx++) {
+    await openSingleCreationTab(idx, idx === batchStartIdx);
+    if (idx < batchEnd) await sleep(500); // stagger between tabs
+  }
+
+  console.log(`[Background] All ${batchSize} batch tabs launched. Waiting for completions...`);
+}
+
+/** Opens a single creation tab for the given batchIdx and registers it in batchTabMap. */
+async function openSingleCreationTab(batchIdx, isFirstInBatch = false) {
   const name = creationConfig.channelName;
   const handle = incrementIdentifier(creationConfig.username, batchIdx);
 
-  console.log(`[Background] Launching Tab for Channel #${batchIdx}/${creationConfig.count}: "${name}" (@${handle})`);
-
-  await chrome.storage.local.set({
-    createBatchCurrent: batchIdx - 1,
-    creationCurrentChannelName: name,
-    creationCurrentHandle: handle,
-    statusText: `Creating Channel ${batchIdx}/${creationConfig.count}: "${name}" (@${handle})...`,
+  // Encode ALL params in the hash so content.js knows exactly what to fill
+  // without any background.js round-trip (which was the source of the stall bug)
+  const hashParams = new URLSearchParams({
+    auto_create: "true",
+    batch_idx: String(batchIdx),
+    batch_total: String(creationConfig.count),
+    channel_name: name,
+    channel_username: handle,
   });
-  addActivityLog(`Creating Channel ${batchIdx}/${creationConfig.count}: "${name}" (@${handle})`, "info");
+  const creationUrl = `https://www.youtube.com/channel_switcher#${hashParams.toString()}`;
 
-  const creationUrl = `https://www.youtube.com/channel_switcher?create_channel=true&channel_name=${encodeURIComponent(
-    name
-  )}&channel_username=${encodeURIComponent(handle)}&batch_idx=${batchIdx}&batch_total=${creationConfig.count}#create_channel=true&channel_name=${encodeURIComponent(
-    name
-  )}&channel_username=${encodeURIComponent(handle)}&batch_idx=${batchIdx}&batch_total=${creationConfig.count}`;
+  console.log(`[Background] Opening tab for Channel #${batchIdx}/${creationConfig.count}: "${name}" (@${handle})`);
 
   try {
-    const tab = await chrome.tabs.create({
-      url: creationUrl,
-      active: true,
-    });
+    const tab = await chrome.tabs.create({ url: creationUrl, active: isFirstInBatch });
+    const tabId = tab.id;
 
-    creationActiveTabId = tab.id;
-
-    // Watchdog timer to ensure it never hangs if a single tab freezes
-    if (creationWatchdogTimer) clearTimeout(creationWatchdogTimer);
-    creationWatchdogTimer = setTimeout(() => {
-      handleCreationTimeout(tab.id, batchIdx);
+    // Per-tab watchdog
+    const watchdogTimer = setTimeout(() => {
+      handleBatchTabTimeout(tabId, batchIdx);
     }, CREATION_WATCHDOG_TIMEOUT_MS);
 
+    batchTabMap[tabId] = {
+      batchIdx,
+      watchdogTimer,
+      formSubmitted: false,
+      redirectHandled: false,
+      done: false,
+    };
+    currentBatchTabIds.add(tabId);
+
+    addActivityLog(`Tab opened for Channel #${batchIdx} (@${handle})`, "info");
   } catch (err) {
-    console.error(`[Background] Failed to launch tab for channel #${batchIdx}:`, err);
-    addActivityLog(`Failed to open tab for channel #${batchIdx}: ${err.message}`, "error");
-    scheduleNextCreation(batchIdx + 1);
+    console.error(`[Background] Failed to open tab for Channel #${batchIdx}:`, err);
+    addActivityLog(`Failed to open tab for Channel #${batchIdx}: ${err.message}`, "error");
+    // Count it as done so the batch can still proceed
+    // We add a dummy entry just to avoid hanging
+    const fakeId = `err_${batchIdx}_${Date.now()}`;
+    batchTabMap[fakeId] = { batchIdx, done: true, error: true };
+    currentBatchTabIds.add(fakeId);
+    checkBatchCompletion();
   }
 }
 
-async function handleCreationSuccessOrRedirect(tabId, msg = null) {
+/** Called when a tab's content.js reports successful channel creation. */
+function handleBatchTabSuccess(tabId, batchIdx, msg = null) {
   if (!isCreatingChannel) return;
-  if (creationRedirectHandled) return;
-  creationRedirectHandled = true;
 
-  if (creationWatchdogTimer) {
-    clearTimeout(creationWatchdogTimer);
-    creationWatchdogTimer = null;
-  }
+  const entry = batchTabMap[tabId];
+  if (!entry || entry.done) return;
 
-  const batchIdx = creationActiveBatchIdx;
-  const chName = msg?.channelName || creationConfig.channelName;
   const chHandle = msg?.channelUsername || incrementIdentifier(creationConfig.username, batchIdx);
-
   creationCompletedCount++;
-  console.log(`[Background] ✅ [${creationCompletedCount}/${creationConfig.count}] Channel #${batchIdx} ("${chName}" / @${chHandle}) confirmed / redirecting!`);
 
-  await chrome.storage.local.set({
-    createBatchCurrent: creationCompletedCount,
-    statusText: `✅ Channel #${batchIdx} created (@${chHandle})! Waiting redirect & opening next...`,
+  console.log(`[Background] ✅ [${creationCompletedCount}/${creationConfig.count}] Channel #${batchIdx} (@${chHandle}) done.`);
+  addActivityLog(`✅ Channel #${batchIdx} (@${chHandle}) created!`, "success");
+
+  chrome.storage.local.set({ createBatchCurrent: creationCompletedCount });
+
+  markBatchTabDone(tabId, true);
+}
+
+/** Called when a tab's content.js reports an error. */
+function handleBatchTabError(tabId, batchIdx, errorMsg) {
+  if (!isCreatingChannel) return;
+
+  const entry = batchTabMap[tabId];
+  if (!entry || entry.done) return;
+
+  console.warn(`[Background] ❌ Channel #${batchIdx} (tab ${tabId}) error: ${errorMsg}`);
+  addActivityLog(`❌ Channel #${batchIdx} error: ${errorMsg}`, "error");
+
+  markBatchTabDone(tabId, false);
+}
+
+/** Called when a tab's watchdog timer fires (hung tab). */
+function handleBatchTabTimeout(tabId, batchIdx) {
+  const entry = batchTabMap[tabId];
+  if (!entry || entry.done) return;
+
+  console.warn(`[Background] ⏰ Channel #${batchIdx} (tab ${tabId}) timed out.`);
+  addActivityLog(`⏰ Channel #${batchIdx} timed out — moving on.`, "warning");
+
+  markBatchTabDone(tabId, false);
+}
+
+/**
+ * Marks a batch tab as done and checks if all tabs in the current batch are done.
+ * If all done → close all batch tabs → launch next batch.
+ */
+function markBatchTabDone(tabId, success) {
+  const entry = batchTabMap[tabId];
+  if (!entry) return;
+
+  if (entry.watchdogTimer) {
+    clearTimeout(entry.watchdogTimer);
+    entry.watchdogTimer = null;
+  }
+  entry.done = true;
+
+  checkBatchCompletion();
+}
+
+/** Check if every tab in the current batch is done. If yes, close all and start next batch. */
+async function checkBatchCompletion() {
+  if (!isCreatingChannel) return;
+  // Guard: only one concurrent call may proceed past this point
+  if (batchCompletionTriggered) return;
+
+  // Check if ALL registered tabs in the batch are done
+  const allDone = [...currentBatchTabIds].every((id) => {
+    const entry = batchTabMap[id];
+    return entry && entry.done;
   });
-  addActivityLog(`✅ Created channel #${batchIdx} (@${chHandle}). Waiting redirect...`, "success");
 
-  // Close completed tab cleanly after short pause
-  setTimeout(async () => {
-    try {
-      if (tabId) await chrome.tabs.remove(tabId);
-    } catch (e) {}
-  }, 1800);
+  if (!allDone) return; // Still waiting for other tabs
 
-  // Wait user-specified delay, then open next channel tab
-  scheduleNextCreation(batchIdx + 1);
-}
+  // Claim the lock — any further calls while we're closing/launching are no-ops
+  batchCompletionTriggered = true;
 
-async function scheduleNextCreation(nextBatchIdx) {
-  if (isCreatingChannel && nextBatchIdx <= creationConfig.count) {
-    console.log(`[Background] Waiting ${creationConfig.delayMs}ms before opening Channel #${nextBatchIdx}...`);
-    await sleep(creationConfig.delayMs);
-    if (isCreatingChannel) {
-      await launchCreationTab(nextBatchIdx);
-    }
-  } else if (isCreatingChannel) {
-    isCreatingChannel = false;
-    await chrome.storage.local.set({
-      isCreatingChannel: false,
-      createBatchCurrent: creationConfig.count,
-      statusText: `🎉 All ${creationConfig.count} channels created successfully!`,
-    });
-    addActivityLog(`🎉 All ${creationConfig.count} channels created successfully!`, "success");
-    console.log(`[Background] Sequential channel creation complete.`);
-  }
-}
+  console.log(`[Background] Entire batch complete. Closing all batch tabs...`);
+  addActivityLog(`Batch complete — closing all batch tabs`, "info");
 
-async function handleCreationTimeout(tabId, batchIdx) {
+  // Snapshot the tab IDs BEFORE resetting state so closing doesn't race with next batch
+  const tabsToClose = [...currentBatchTabIds].filter(
+    (id) => typeof id !== "string" || !id.startsWith("err_")
+  );
+
+  // Close every tab in the batch simultaneously
+  await Promise.allSettled(tabsToClose.map(async (id) => {
+    try { await chrome.tabs.remove(id); } catch (e) {}
+  }));
+
+  // Brief pause between batches so YouTube backend isn't hammered
+  await sleep(CREATION_STEP_DELAY_MS);
+
   if (!isCreatingChannel) return;
-  console.warn(`[Background] Creation watchdog timeout for Channel #${batchIdx} (tab ${tabId}).`);
-  addActivityLog(`Channel #${batchIdx} timed out waiting for redirect. Proceeding to next...`, "warning");
 
-  try {
-    if (tabId) await chrome.tabs.remove(tabId);
-  } catch (e) {}
-
-  scheduleNextCreation(batchIdx + 1);
-}
-
-function handleCreationTabClosed() {
-  if (!isCreatingChannel) return;
-  console.log(`[Background] Active creation tab was closed.`);
-  if (creationWatchdogTimer) {
-    clearTimeout(creationWatchdogTimer);
-    creationWatchdogTimer = null;
-  }
-  const nextIdx = creationActiveBatchIdx + 1;
-  scheduleNextCreation(nextIdx);
+  // Launch next batch (batchCompletionTriggered is reset inside launchBatch)
+  await launchBatch(nextBatchStartIdx);
 }
 
 function incrementIdentifier(template, batchIdx) {
@@ -395,38 +476,42 @@ async function handleChannelCreationStatus(statusMsg) {
 
 async function handleChannelCreationSuccess(msg, senderTabId) {
   if (!isCreatingChannel) return;
-  handleCreationSuccessOrRedirect(senderTabId || creationActiveTabId, msg);
+  const entry = batchTabMap[senderTabId];
+  const batchIdx = entry ? entry.batchIdx : null;
+  if (!batchIdx) return;
+  handleBatchTabSuccess(senderTabId, batchIdx, msg);
 }
 
 async function handleChannelCreationError(errorMsg, senderTabId) {
-  console.warn(`[Background] Channel creation error on Channel #${creationActiveBatchIdx}: ${errorMsg}`);
-  addActivityLog(`Channel #${creationActiveBatchIdx} error: ${errorMsg}. Skipping to next...`, "error");
-
-  if (creationWatchdogTimer) {
-    clearTimeout(creationWatchdogTimer);
-    creationWatchdogTimer = null;
-  }
-
-  try {
-    if (senderTabId) await chrome.tabs.remove(senderTabId);
-  } catch (e) {}
-
-  scheduleNextCreation(creationActiveBatchIdx + 1);
+  const entry = batchTabMap[senderTabId];
+  const batchIdx = entry ? entry.batchIdx : "?";
+  console.warn(`[Background] Channel creation error on Channel #${batchIdx} (tab ${senderTabId}): ${errorMsg}`);
+  addActivityLog(`Channel #${batchIdx} error: ${errorMsg}`, "error");
+  await chrome.storage.local.set({
+    statusText: `⚠️ Channel #${batchIdx} error: ${errorMsg}`,
+  });
+  if (senderTabId) handleBatchTabError(senderTabId, batchIdx, errorMsg);
 }
 
 async function handleStopChannelCreation() {
   console.log("[Background] Channel creation stopped by user.");
   isCreatingChannel = false;
-  if (creationWatchdogTimer) {
-    clearTimeout(creationWatchdogTimer);
-    creationWatchdogTimer = null;
+
+  // Clear all per-tab watchdogs
+  for (const tabId of Object.keys(batchTabMap)) {
+    const entry = batchTabMap[tabId];
+    if (entry?.watchdogTimer) clearTimeout(entry.watchdogTimer);
   }
-  if (creationActiveTabId) {
-    try {
-      await chrome.tabs.remove(creationActiveTabId);
-    } catch (e) {}
-    creationActiveTabId = null;
+
+  // Close all open batch tabs
+  for (const tabId of currentBatchTabIds) {
+    if (typeof tabId === "string" && tabId.startsWith("err_")) continue;
+    try { await chrome.tabs.remove(tabId); } catch (e) {}
   }
+
+  batchTabMap = {};
+  currentBatchTabIds = new Set();
+
   await chrome.storage.local.set({
     isCreatingChannel: false,
     statusText: "Channel creation cancelled by user.",
@@ -438,7 +523,7 @@ async function handleStopChannelCreation() {
 // SWITCH & CHAT AUTOMATION
 // ==============================================================
 
-async function handleStartAutomation({ chatUrl, startIndex, endIndex, delayMs }) {
+async function handleStartAutomation({ chatUrl, startIndex, endIndex }) {
   handleStopAutomation(); // Reset any existing active timers
 
   isRunning = true;
@@ -448,12 +533,11 @@ async function handleStartAutomation({ chatUrl, startIndex, endIndex, delayMs })
     chatUrl: (chatUrl || config.chatUrl).trim(),
     startIndex: parseInt(startIndex, 10) || 0,
     endIndex: parseInt(endIndex, 10) || 0,
-    delayMs: Math.max(200, parseInt(delayMs, 10) || 1000),
   };
 
   const totalTabs = Math.max(0, config.endIndex - config.startIndex + 1);
   console.log(
-    `[Background] Starting range-based automation: Channels ${config.startIndex} to ${config.endIndex} (${totalTabs} tabs), Delay: ${config.delayMs}ms`
+    `[Background] Starting range-based automation: Channels ${config.startIndex} to ${config.endIndex} (${totalTabs} tabs)`
   );
 
   await chrome.storage.local.set({
@@ -518,7 +602,6 @@ async function launchTabForIndex(index) {
       chatUrl: config.chatUrl,
       startIndex: config.startIndex,
       endIndex: config.endIndex,
-      delayMs: config.delayMs,
       channelClicked: false,
       redirectHandled: false,
       tabId,
@@ -621,8 +704,8 @@ async function completeJobAndRedirect(tabId) {
 
 async function scheduleNext(nextIndex) {
   if (isRunning && nextIndex <= config.endIndex) {
-    console.log(`[Background] Waiting ${config.delayMs}ms before launching Channel #${nextIndex}...`);
-    await sleep(config.delayMs);
+    console.log(`[Background] Waiting ${AUTOMATION_STEP_DELAY_MS}ms before launching Channel #${nextIndex}...`);
+    await sleep(AUTOMATION_STEP_DELAY_MS);
     if (isRunning) {
       await launchTabForIndex(nextIndex);
     }
@@ -756,13 +839,15 @@ async function handleStopAutomation() {
   isRunning = false;
   isCreatingChannel = false;
 
-  if (creationWatchdogTimer) {
-    clearTimeout(creationWatchdogTimer);
-    creationWatchdogTimer = null;
+  // Clear all batch creation watchdogs
+  for (const tabId of Object.keys(batchTabMap)) {
+    const entry = batchTabMap[tabId];
+    if (entry?.watchdogTimer) clearTimeout(entry.watchdogTimer);
   }
-  creationActiveTabId = null;
+  batchTabMap = {};
+  currentBatchTabIds = new Set();
 
-  // Clear all pending watchdogs
+  // Clear all switcher job watchdogs
   for (const tabId of Object.keys(activeJobs)) {
     if (activeJobs[tabId]?.watchdogTimer) {
       clearTimeout(activeJobs[tabId].watchdogTimer);

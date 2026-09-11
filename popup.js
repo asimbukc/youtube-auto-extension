@@ -4,7 +4,6 @@ const DEFAULT_URL = "https://www.youtube.com/live_chat?is_popout=1&v=5FW9ZVMR_7M
 const chatUrlInput = document.getElementById("chatUrl");
 const startIndexInput = document.getElementById("startIndex");
 const endIndexInput = document.getElementById("endIndex");
-const delayMsInput = document.getElementById("delayMs");
 const startBtn = document.getElementById("startBtn");
 const switchTabStatus = document.getElementById("switchTabStatus");
 const switchTabDot = document.getElementById("switchTabDot");
@@ -13,7 +12,6 @@ const switchTabDot = document.getElementById("switchTabDot");
 const channelNameInput = document.getElementById("channelName");
 const channelUsernameInput = document.getElementById("channelUsername");
 const createCountInput = document.getElementById("createCount");
-const createDelayMsInput = document.getElementById("createDelayMs");
 const createChannelBtn = document.getElementById("createChannelBtn");
 const createTabStatus = document.getElementById("createTabStatus");
 const createTabDot = document.getElementById("createTabDot");
@@ -97,7 +95,6 @@ function checkActiveTab() {
         "channelName",
         "channelUsername",
         "createCount",
-        "createDelayMs",
         "createBatchCurrent",
         "createBatchTotal",
         "activityLogs",
@@ -305,7 +302,6 @@ startBtn.addEventListener("click", () => {
   const chatUrl = chatUrlInput.value.trim() || DEFAULT_URL;
   const startIndex = startIndexInput.value.trim() !== "" ? parseInt(startIndexInput.value, 10) : 0;
   const endIndex = endIndexInput.value.trim() !== "" ? parseInt(endIndexInput.value, 10) : 19;
-  const delayMs = parseInt(delayMsInput.value, 10) || 1000;
 
   if (endIndex < startIndex) {
     alert("End Index must be greater than or equal to Start Index.");
@@ -317,7 +313,6 @@ startBtn.addEventListener("click", () => {
     chatUrl,
     startIndex,
     endIndex,
-    delayMs,
   });
 
   // Switch to Tracks tab to monitor live data
@@ -329,7 +324,6 @@ createChannelBtn.addEventListener("click", () => {
   const channelName = (channelNameInput.value.trim() || "Messi");
   const username = (channelUsernameInput.value.trim() || "Lion_________________1_Messi");
   const count = Math.max(1, parseInt(createCountInput.value, 10) || 1);
-  const delayMs = Math.max(1000, parseInt(createDelayMsInput.value, 10) || 2500);
 
   // Persist exact user values to storage so tabs always read user input
   chrome.storage.local.set({
@@ -346,7 +340,6 @@ createChannelBtn.addEventListener("click", () => {
     channelName,
     username,
     count,
-    delayMs,
   });
 
   // Switch to Tracks tab to monitor live data
