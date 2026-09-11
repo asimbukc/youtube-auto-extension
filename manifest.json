@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Channel Switcher, Creator & Automator",
+  "version": "2.3.0",
+  "description": "Switches channels, creates YouTube channels automatically, and manages brand accounts.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://*.youtube.com/*",
+    "*://*.google.com/*",
+    "*://myaccount.google.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "YouTube Switcher"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.youtube.com/*",
+        "*://*.google.com/*",
+        "*://myaccount.google.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_start"
+    }
+  ]
+}

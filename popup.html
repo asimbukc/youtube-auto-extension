@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YT Switcher & Automator</title>
+  <style>
+    :root {
+      --bg-color: #0f1117;
+      --card-bg: #1a1d26;
+      --accent: #ff0033;
+      --accent-hover: #cc0029;
+      --accent-glow: rgba(255, 0, 51, 0.25);
+      --create-accent: #00b4d8;
+      --create-hover: #0096c7;
+      --create-glow: rgba(0, 180, 216, 0.3);
+      --text-main: #f0f3f8;
+      --text-muted: #8d96a7;
+      --input-bg: #242834;
+      --border: #2e3547;
+      --success: #00e676;
+      --warning: #ffb300;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      width: 380px;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      user-select: none;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .header svg {
+      width: 26px;
+      height: 26px;
+      fill: var(--accent);
+      flex-shrink: 0;
+    }
+
+    .header-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text-main);
+      line-height: 1.2;
+    }
+
+    .header-subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    /* Tab navigation */
+    .tab-bar {
+      display: flex;
+      background-color: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 3px;
+      margin-bottom: 14px;
+      gap: 3px;
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 7px 6px;
+      font-size: 11px;
+      font-weight: 600;
+      background: transparent;
+      color: var(--text-muted);
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+    }
+
+    .tab-btn.active {
+      background-color: var(--input-bg);
+      color: var(--text-main);
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    }
+
+    .tab-btn.active.tab-create {
+      color: #38bdf8;
+    }
+
+    .tab-btn.active.tab-switch {
+      color: #ff5252;
+    }
+
+    .tab-btn.active.tab-delete {
+      color: #fb7185;
+    }
+
+    .tab-btn:hover:not(.active) {
+      color: var(--text-main);
+      background-color: rgba(255, 255, 255, 0.05);
+    }
+
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+      animation: fadeIn 0.2s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(2px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .form-group {
+      margin-bottom: 11px;
+    }
+
+    .row {
+      display: flex;
+      gap: 10px;
+    }
+
+    .row .form-group {
+      flex: 1;
+    }
+
+    label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 5px;
+    }
+
+    input[type="text"],
+    input[type="number"] {
+      width: 100%;
+      padding: 8px 10px;
+      font-size: 12px;
+      background-color: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-main);
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    input[type="text"]:focus,
+    input[type="number"]:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-glow);
+    }
+
+    .tab-content#createTab input[type="text"]:focus,
+    .tab-content#createTab input[type="number"]:focus {
+      border-color: var(--create-accent);
+      box-shadow: 0 0 0 2px var(--create-glow);
+    }
+
+    .status-card {
+      background-color: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 11px;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 220px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: var(--text-muted);
+      transition: background-color 0.3s;
+      flex-shrink: 0;
+    }
+
+    .status-dot.active {
+      background-color: var(--success);
+      box-shadow: 0 0 8px rgba(0, 230, 118, 0.6);
+      animation: pulse 1.8s infinite;
+    }
+
+    .status-dot.active-create {
+      background-color: var(--create-accent);
+      box-shadow: 0 0 8px var(--create-glow);
+      animation: pulse 1.8s infinite;
+    }
+
+    .status-dot.active-delete {
+      background-color: #ff5252;
+      box-shadow: 0 0 8px rgba(255, 82, 82, 0.6);
+      animation: pulse 1.8s infinite;
+    }
+
+    .status-dot.active-paused {
+      background-color: var(--warning);
+      box-shadow: 0 0 10px rgba(255, 179, 0, 0.8);
+      animation: pulse 1.2s infinite;
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.15); opacity: 1; }
+      100% { transform: scale(0.95); opacity: 0.8; }
+    }
+
+    .badge {
+      font-size: 10px;
+      padding: 2px 7px;
+      background-color: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 8px;
+    }
+
+    button {
+      flex: 1;
+      padding: 9px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .btn-start {
+      background-color: var(--accent);
+      color: #fff;
+    }
+
+    .btn-start:hover:not(:disabled) {
+      background-color: var(--accent-hover);
+      box-shadow: 0 4px 12px var(--accent-glow);
+    }
+
+    .btn-create-submit {
+      background-color: var(--create-accent);
+      color: #ffffff;
+    }
+
+    .btn-create-submit:hover:not(:disabled) {
+      background-color: var(--create-hover);
+      box-shadow: 0 4px 12px var(--create-glow);
+    }
+
+    .btn-reset {
+      background-color: var(--input-bg);
+      border: 1px solid var(--border);
+      color: var(--text-main);
+    }
+
+    .btn-reset:hover:not(:disabled) {
+      background-color: #2e3547;
+      border-color: #3e4860;
+    }
+
+    .btn-delete-channels {
+      background-color: #d32f2f;
+      color: #ffffff;
+      flex: 2;
+      position: relative;
+    }
+
+    .btn-delete-channels:hover:not(:disabled) {
+      background-color: #b71c1c;
+      box-shadow: 0 4px 12px rgba(211, 47, 47, 0.4);
+    }
+
+    .btn-delete-channels:disabled {
+      background-color: #3b2024;
+      color: #7a6e71;
+      border: 1px dashed #5a3036;
+      cursor: not-allowed;
+      box-shadow: none !important;
+      opacity: 0.7;
+    }
+
+    .btn-resume-channels {
+      background-color: #ffb300;
+      color: #0f1117;
+      font-weight: 700;
+      flex: 2;
+      display: none;
+      box-shadow: 0 0 10px rgba(255, 179, 0, 0.35);
+    }
+
+    .btn-resume-channels:hover:not(:disabled) {
+      background-color: #ffa000;
+      box-shadow: 0 4px 14px rgba(255, 179, 0, 0.55);
+    }
+
+    .url-notice {
+      font-size: 10px;
+      color: #8d96a7;
+      text-align: center;
+      margin-top: 8px;
+      line-height: 1.3;
+    }
+
+    .hint-text {
+      font-size: 10px;
+      color: var(--text-muted);
+      margin-top: 3px;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      box-shadow: none !important;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <svg viewBox="0 0 24 24">
+      <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+    </svg>
+    <div>
+      <div class="header-title">YouTube Switcher & Studio</div>
+      <div class="header-subtitle">Channel Switcher • Creator • Brand Deleter</div>
+    </div>
+  </div>
+
+  <!-- Tab Bar -->
+  <div class="tab-bar">
+    <button class="tab-btn active tab-switch" data-tab="switchTab">
+      <svg style="width:13px;height:13px;fill:currentColor;" viewBox="0 0 24 24">
+        <path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h12v12z"/>
+      </svg>
+      Switch & Chat
+    </button>
+    <button class="tab-btn tab-create" data-tab="createTab">
+      <svg style="width:13px;height:13px;fill:currentColor;" viewBox="0 0 24 24">
+        <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+      </svg>
+      Create Channel
+    </button>
+    <button class="tab-btn tab-delete" data-tab="deleteTab">
+      <svg style="width:13px;height:13px;fill:currentColor;" viewBox="0 0 24 24">
+        <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+      </svg>
+      Delete Brand
+    </button>
+  </div>
+
+  <!-- Global Status Card -->
+  <div class="status-card">
+    <div class="status-indicator">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">Idle</span>
+    </div>
+    <div class="badge" id="indexBadge">Ready</div>
+  </div>
+
+  <!-- TAB 1: Switch & Chat -->
+  <div class="tab-content active" id="switchTab">
+    <div class="form-group">
+      <label for="chatUrl">Live Chat / Redirect URL</label>
+      <input
+        type="text"
+        id="chatUrl"
+        placeholder="https://www.youtube.com/live_chat?..."
+        value="https://www.youtube.com/live_chat?is_popout=1&v=5FW9ZVMR_7M"
+        spellcheck="false"
+      />
+    </div>
+
+    <div class="row">
+      <div class="form-group">
+        <label for="startIndex">Start Index</label>
+        <input type="number" id="startIndex" value="0" min="0" max="500" />
+      </div>
+      <div class="form-group">
+        <label for="endIndex">End Index</label>
+        <input type="number" id="endIndex" value="19" min="0" max="500" />
+      </div>
+      <div class="form-group">
+        <label for="delayMs">Delay (ms)</label>
+        <input type="number" id="delayMs" value="1000" min="200" max="10000" step="100" />
+      </div>
+    </div>
+
+    <div class="button-group">
+      <button class="btn-start" id="startBtn">Start Automation</button>
+      <button class="btn-reset" id="resetBtn">Stop</button>
+    </div>
+  </div>
+
+  <!-- TAB 2: Create YouTube Channel -->
+  <div class="tab-content" id="createTab">
+    <div class="form-group">
+      <label for="channelName">Channel Name</label>
+      <input
+        type="text"
+        id="channelName"
+        placeholder="e.g. Messi"
+        value="Messi"
+        maxlength="50"
+        spellcheck="false"
+      />
+    </div>
+
+    <div class="form-group">
+      <label for="channelUsername">Handle / Username</label>
+      <input
+        type="text"
+        id="channelUsername"
+        placeholder="e.g. Lion_________________1_Messi"
+        value="Lion_________________1_Messi"
+        spellcheck="false"
+      />
+      <div class="hint-text">For batch creation, a unique numeric suffix is appended if needed.</div>
+    </div>
+
+    <div class="row">
+      <div class="form-group">
+        <label for="createCount">Count (Qty)</label>
+        <input type="number" id="createCount" value="1" min="1" max="50" />
+      </div>
+      <div class="form-group">
+        <label for="createDelayMs">Delay (ms)</label>
+        <input type="number" id="createDelayMs" value="2500" min="1000" max="20000" step="500" />
+      </div>
+    </div>
+
+    <div class="button-group">
+      <button class="btn-create-submit" id="createChannelBtn">
+        <svg style="width:15px;height:15px;fill:currentColor;" viewBox="0 0 24 24">
+          <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+        </svg>
+        Create Channel
+      </button>
+      <button class="btn-reset" id="stopCreateBtn">Stop</button>
+    </div>
+  </div>
+
+  <!-- TAB 3: Delete Brand Accounts -->
+  <div class="tab-content" id="deleteTab">
+    <div class="button-group">
+      <button class="btn-delete-channels" id="deleteChannelsBtn" disabled>
+        <svg style="width:16px;height:16px;fill:currentColor;" viewBox="0 0 24 24">
+          <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+        </svg>
+        Delete Brand Accounts
+      </button>
+      <button class="btn-resume-channels" id="resumeDeleteBtn">
+        <svg style="width:16px;height:16px;fill:currentColor;" viewBox="0 0 24 24">
+          <path d="M8 5v14l11-7z"/>
+        </svg>
+        Resume Deletion
+      </button>
+      <button class="btn-reset" id="stopDeleteBtn">Stop</button>
+    </div>
+    <div class="url-notice" id="deleteBtnNotice">
+      ⚠️ Active only on https://myaccount.google.com/brandaccounts
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
