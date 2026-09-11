@@ -54,7 +54,7 @@ const tabButtons = document.querySelectorAll(".tab-btn");
 const tabContents = document.querySelectorAll(".tab-content");
 
 let isOnBrandAccountsPage = false;
-let currentActiveTabName = "switchTab";
+let currentActiveTabName = "tracksTab";
 
 // Tab Switching logic
 function switchTab(targetTab) {
