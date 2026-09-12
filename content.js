@@ -131,6 +131,7 @@
         chrome.storage.local.get(
           [
             "isCreatingChannel",
+            "isRunning",
             "creationBaseChannelName",
             "creationBaseUsername",
             "creationCurrentChannelName",
@@ -154,7 +155,11 @@
       hashParams.get("auto_create") === "true" ||
       hashParams.get("create_channel") === "true" ||
       searchParams.get("create_channel") === "true" ||
-      storage?.isCreatingChannel === true;
+      (storage?.isCreatingChannel === true && storage?.isRunning !== true);
+
+    if (!isCreateChannel) {
+      return;
+    }
 
     // Wait until the tab actually becomes active/visible before processing
     // This perfectly matches the requested sequential "focus-cycling" strategy.
@@ -591,8 +596,9 @@
   });
   // Active interval loop to ensure creation starts as soon as YouTube finishes rendering
   setInterval(() => {
+    if (!chrome.runtime?.id) return;
     if (!isExecutingCreation) {
-      checkAndRunCreationFlow();
+      checkAndRunCreationFlow().catch(e => console.debug("Ignored creation flow error", e));
     }
   }, 2000);
 

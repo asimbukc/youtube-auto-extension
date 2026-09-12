@@ -20,7 +20,7 @@ let nextBatchStartIdx = 1;
 // Guard: prevents checkBatchCompletion from firing multiple times concurrently
 let batchCompletionTriggered = false;
 
-const BATCH_SIZE = 5;
+let BATCH_SIZE = 5;
 
 let activeJobs = {}; // tabId -> job data & watchdog timer
 let config = {
@@ -217,6 +217,7 @@ async function handleStartChannelCreation({ channelName, username, count }) {
   orderedBatchTabIds = [];
 
   const totalCount = Math.max(1, parseInt(count, 10) || 1);
+  BATCH_SIZE = totalCount;
   const baseName = (channelName || "Messi").trim();
   const baseUsername = (username || "Lion_________________1_Messi").trim();
 
