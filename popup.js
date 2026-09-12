@@ -23,6 +23,14 @@ const deleteBtnNotice = document.getElementById("deleteBtnNotice");
 const deleteTabStatus = document.getElementById("deleteTabStatus");
 const deleteTabDot = document.getElementById("deleteTabDot");
 
+// Subs Elements
+const subUrlInput = document.getElementById("subUrl");
+const subStartIndexInput = document.getElementById("subStartIndex");
+const subEndIndexInput = document.getElementById("subEndIndex");
+const startSubBtn = document.getElementById("startSubBtn");
+const subsTabStatus = document.getElementById("subsTabStatus");
+const subsTabDot = document.getElementById("subsTabDot");
+
 // Tracks Interface Elements
 const statusDot = document.getElementById("statusDot");
 const statusText = document.getElementById("statusText");
@@ -43,6 +51,11 @@ const trackCardDelete = document.getElementById("trackCardDelete");
 const tracksDeleteStatus = document.getElementById("tracksDeleteStatus");
 const tracksDeleteInfo = document.getElementById("tracksDeleteInfo");
 const cancelDeleteBtn = document.getElementById("cancelDeleteBtn");
+
+const trackCardSubs = document.getElementById("trackCardSubs");
+const tracksSubsStatus = document.getElementById("tracksSubsStatus");
+const tracksSubsInfo = document.getElementById("tracksSubsInfo");
+const cancelSubBtn = document.getElementById("cancelSubBtn");
 
 const activityLogList = document.getElementById("activityLogList");
 const clearLogBtn = document.getElementById("clearLogBtn");
@@ -87,10 +100,12 @@ function checkActiveTab() {
         "isDeleting",
         "isDeletingPaused",
         "isCreatingChannel",
+        "isSubscribing",
         "currentIndex",
         "startIndex",
         "endIndex",
         "liveChatUrl",
+        "subUrl",
         "statusText",
         "channelName",
         "channelUsername",
@@ -110,7 +125,8 @@ function updateUI(state) {
   const isSwitchBusy = Boolean(state.isRunning);
   const isCreateBusy = Boolean(state.isCreatingChannel);
   const isDeleteBusy = Boolean(state.isDeleting || state.isDeletingPaused);
-  const isAnyBusy = isSwitchBusy || isCreateBusy || isDeleteBusy;
+  const isSubBusy = Boolean(state.isSubscribing);
+  const isAnyBusy = isSwitchBusy || isCreateBusy || isDeleteBusy || isSubBusy;
 
   const currentIndex = state.currentIndex ?? 0;
   const startIndex = state.startIndex ?? 0;
@@ -174,6 +190,16 @@ function updateUI(state) {
     }
   }
 
+  // Tab 5: Subscribe Channel
+  if (subsTabStatus) {
+    subsTabStatus.textContent = isSubBusy ? "Busy" : "Free";
+    subsTabStatus.className = `tab-status-pill ${isSubBusy ? "status-busy" : "status-free"}`;
+  }
+  if (subsTabDot) {
+    subsTabDot.className = `tab-dot ${isSubBusy ? "busy" : ""}`;
+  }
+  startSubBtn.disabled = isAnyBusy;
+
   // ---------------------------------------------------------------------------
   // 2. TRACKS INTERFACE: Displays all status with message, telemetry & cancel buttons
   // ---------------------------------------------------------------------------
@@ -202,6 +228,11 @@ function updateUI(state) {
     statusDot.classList.add("active");
     statusText.textContent = customStatus;
     statusText.style.color = "var(--success)";
+    indexBadge.textContent = `Channel: ${currentIndex}/${endIndex}`;
+  } else if (isSubBusy) {
+    statusDot.classList.add("active");
+    statusText.textContent = customStatus;
+    statusText.style.color = "#ff007b";
     indexBadge.textContent = `Channel: ${currentIndex}/${endIndex}`;
   } else {
     statusDot.className = "status-dot";
@@ -245,6 +276,19 @@ function updateUI(state) {
     tracksDeleteInfo.textContent = "Deleting Brand Account channels sequentially...";
   } else {
     tracksDeleteInfo.textContent = "Idle - No brand accounts being deleted.";
+  }
+
+  // Operation Card 4: Channel Subscribing
+  if (tracksSubsStatus) {
+    tracksSubsStatus.textContent = isSubBusy ? "Busy" : "Free";
+    tracksSubsStatus.className = `tab-status-pill ${isSubBusy ? "status-busy" : "status-free"}`;
+    trackCardSubs.classList.toggle("busy", isSubBusy);
+    cancelSubBtn.disabled = !isSubBusy;
+    if (isSubBusy) {
+      tracksSubsInfo.textContent = `Subscribing with Channel #${currentIndex} (Range: ${startIndex} → ${endIndex})`;
+    } else {
+      tracksSubsInfo.textContent = "Idle - No channels being subscribed.";
+    }
   }
 
   // Render Activity Log
@@ -381,6 +425,31 @@ deleteChannelsBtn.addEventListener("click", () => {
   switchTab("tracksTab");
 });
 
+// Start Subscribe Channel
+startSubBtn.addEventListener("click", () => {
+  const subUrl = subUrlInput.value.trim();
+  if (!subUrl) {
+    alert("Please enter a valid Channel URL.");
+    return;
+  }
+  const startIndex = subStartIndexInput.value.trim() !== "" ? parseInt(subStartIndexInput.value, 10) : 0;
+  const endIndex = subEndIndexInput.value.trim() !== "" ? parseInt(subEndIndexInput.value, 10) : 19;
+
+  if (endIndex < startIndex) {
+    alert("End Index must be greater than or equal to Start Index.");
+    return;
+  }
+
+  chrome.runtime.sendMessage({
+    action: "start_subscribing",
+    subUrl,
+    startIndex,
+    endIndex,
+  });
+
+  switchTab("tracksTab");
+});
+
 // Resume Brand Accounts Deletion if paused
 resumeDeleteBtn.addEventListener("click", () => {
   chrome.storage.local.set({
@@ -457,6 +526,19 @@ cancelDeleteBtn.addEventListener("click", () => {
     isDeleting: false,
     isDeletingPaused: false,
     statusText: "Brand deletion cancelled by user",
+  });
+});
+
+// 4. Cancel Subscribing
+cancelSubBtn.addEventListener("click", () => {
+  chrome.runtime.sendMessage({
+    action: "stop_subscribing",
+  });
+
+  updateUI({
+    isSubscribing: false,
+    currentIndex: 0,
+    statusText: "Channel subscribing cancelled by user",
   });
 });
 

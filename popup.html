@@ -110,6 +110,10 @@
       color: #38bdf8;
     }
 
+    .tab-btn.active.tab-subs {
+      color: #ff007b;
+    }
+
     .tab-btn.active.tab-delete {
       color: #fb7185;
     }
@@ -464,6 +468,7 @@
 
     .track-card-title.switch-title { color: #ff6b6b; }
     .track-card-title.create-title { color: #38bdf8; }
+    .track-card-title.subs-title { color: #ff007b; }
     .track-card-title.delete-title { color: #fb7185; }
 
     .track-card-info {
@@ -631,6 +636,13 @@
       Create
       <span class="tab-dot" id="createTabDot"></span>
     </button>
+    <button class="tab-btn tab-subs" data-tab="subsTab">
+      <svg style="width:12px;height:12px;fill:currentColor;" viewBox="0 0 24 24">
+        <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+      </svg>
+      Subs
+      <span class="tab-dot" id="subsTabDot"></span>
+    </button>
     <button class="tab-btn tab-delete" data-tab="deleteTab">
       <svg style="width:12px;height:12px;fill:currentColor;" viewBox="0 0 24 24">
         <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
@@ -724,6 +736,44 @@
     </div>
   </div>
 
+  <!-- TAB 5: Subscribe Channels (Input fields + Start button only, Free/Busy status) -->
+  <div class="tab-content" id="subsTab">
+    <div class="tab-status-banner">
+      <span class="tab-status-label">Tab Status</span>
+      <span class="tab-status-pill status-free" id="subsTabStatus">Free</span>
+    </div>
+
+    <div class="form-group">
+      <label for="subUrl">Channel URL to Subscribe</label>
+      <input
+        type="text"
+        id="subUrl"
+        placeholder="https://www.youtube.com/@ChannelName"
+        spellcheck="false"
+      />
+    </div>
+
+    <div class="row">
+      <div class="form-group">
+        <label for="subStartIndex">Start Index</label>
+        <input type="number" id="subStartIndex" placeholder="0" min="0" max="500" />
+      </div>
+      <div class="form-group">
+        <label for="subEndIndex">End Index</label>
+        <input type="number" id="subEndIndex" placeholder="19" min="0" max="500" />
+      </div>
+    </div>
+
+    <div class="button-group">
+      <button class="btn-start" style="background-color: #ff007b" id="startSubBtn">
+        <svg style="width:12px;height:12px;fill:currentColor;" viewBox="0 0 24 24">
+          <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+        </svg>
+        Start Subscribing
+      </button>
+    </div>
+  </div>
+
   <!-- TAB 3: Delete Brand Accounts (Action button only, Free/Busy status) -->
   <div class="tab-content" id="deleteTab">
     <div class="tab-status-banner">
@@ -792,6 +842,22 @@
         <button class="btn-cancel" id="cancelCreateBtn" disabled>
           <svg style="width:12px;height:12px;fill:currentColor;" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
           Cancel Channel Creation
+        </button>
+      </div>
+
+      <!-- Operation 4: Channel Subscribing -->
+      <div class="track-card" id="trackCardSubs">
+        <div class="track-card-header">
+          <div class="track-card-title subs-title">
+            <svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+            Channel Subscribing
+          </div>
+          <span class="tab-status-pill status-free" id="tracksSubsStatus">Free</span>
+        </div>
+        <div class="track-card-info" id="tracksSubsInfo">Idle - No channels being subscribed.</div>
+        <button class="btn-cancel" id="cancelSubBtn" disabled>
+          <svg style="width:12px;height:12px;fill:currentColor;" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          Cancel Subscribing
         </button>
       </div>
 
