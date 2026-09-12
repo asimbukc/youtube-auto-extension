@@ -718,69 +718,105 @@
     currentUrl.includes("youtube.com")
   ) {
     if (!currentUrl.includes("channel_switcher")) {
-      console.log("[YT Switcher] Target page loaded. Searching for chat/text input to focus...");
+      console.log("[YT Switcher] Target page loaded. Checking automation mode...");
       await waitForPageReady();
 
-      try {
-        const inputSelectors = [
-          'div#input[contenteditable="true"]',
-          'yt-live-chat-text-input-field-renderer #input',
-          'yt-live-chat-message-input-renderer #input',
-          '#input.yt-live-chat-text-input-field-renderer',
-          '#input[contenteditable="true"]',
-          '#contenteditable-root',
-          'tp-yt-paper-input-container input',
-          'textarea',
-          'input[type="text"]',
-          'input:not([type="hidden"])',
-          '[contenteditable="true"]',
-        ];
+      const storageState = await new Promise((resolve) => {
+        chrome.storage.local.get(['automationMode'], resolve);
+      });
+      const automationMode = storageState.automationMode || "chat";
 
-        const focusTarget = await waitForDeep(() => {
-          for (const selector of inputSelectors) {
-            const matched = querySelectorDeep(selector);
-            const visible = matched.find((el) => {
-              const rect = el.getBoundingClientRect();
-              return el.offsetParent !== null || (rect.width > 0 && rect.height > 0);
+      if (automationMode === "subscribe") {
+        console.log("[YT Switcher] Automation Mode: Subscribe. Looking for Subscribe button...");
+        try {
+          const subscribeTarget = await waitForDeep(() => {
+            const buttons = querySelectorDeep('button');
+            const target = buttons.find(btn => {
+              const ariaLabel = btn.getAttribute('aria-label');
+              const textContent = btn.textContent || "";
+              return (ariaLabel && ariaLabel.toLowerCase().includes('subscribe to')) || 
+                     (textContent.trim().toLowerCase() === 'subscribe');
             });
-            if (visible) return visible;
-          }
-          return null;
-        }, 15000);
-
-        if (focusTarget) {
-          console.log("[YT Switcher] Found target input. Activating focus...", focusTarget);
-          focusTarget.scrollIntoView({ behavior: "smooth", block: "center" });
-          await sleep(200);
-
-          focusTarget.focus();
-          focusTarget.dispatchEvent(new Event("focus", { bubbles: true }));
-          focusTarget.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
-          focusTarget.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
-          focusTarget.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-
-          if (typeof focusTarget.click === "function") {
-            focusTarget.click();
-          }
-
-          try {
-            if (focusTarget.isContentEditable) {
-              const range = document.createRange();
-              const sel = window.getSelection();
-              range.selectNodeContents(focusTarget);
-              range.collapse(false);
-              sel.removeAllRanges();
-              sel.addRange(range);
-            } else if (typeof focusTarget.setSelectionRange === "function") {
-              const len = focusTarget.value?.length || 0;
-              focusTarget.setSelectionRange(len, len);
+            if (target) {
+              const rect = target.getBoundingClientRect();
+              if (target.offsetParent !== null || (rect.width > 0 && rect.height > 0)) {
+                return target;
+              }
             }
-          } catch (e) {}
+            return null;
+          }, 15000);
 
-          console.log("✅ [YT Switcher] Element focused successfully!");
+          if (subscribeTarget) {
+            console.log("[YT Switcher] Found Subscribe button. Clicking...", subscribeTarget);
+            await smartClick(subscribeTarget);
+            console.log("✅ [YT Switcher] Subscribe button clicked successfully!");
+          }
+        } catch (err) {
+          console.log("[YT Switcher] Subscribe button not found on this page.");
         }
-      } catch (err) {
-        console.log("[YT Switcher] No chat input found on this page.");
+      } else {
+        console.log("[YT Switcher] Automation Mode: Chat. Searching for chat/text input to focus...");
+        try {
+          const inputSelectors = [
+            'div#input[contenteditable="true"]',
+            'yt-live-chat-text-input-field-renderer #input',
+            'yt-live-chat-message-input-renderer #input',
+            '#input.yt-live-chat-text-input-field-renderer',
+            '#input[contenteditable="true"]',
+            '#contenteditable-root',
+            'tp-yt-paper-input-container input',
+            'textarea',
+            'input[type="text"]',
+            'input:not([type="hidden"])',
+            '[contenteditable="true"]',
+          ];
+
+          const focusTarget = await waitForDeep(() => {
+            for (const selector of inputSelectors) {
+              const matched = querySelectorDeep(selector);
+              const visible = matched.find((el) => {
+                const rect = el.getBoundingClientRect();
+                return el.offsetParent !== null || (rect.width > 0 && rect.height > 0);
+              });
+              if (visible) return visible;
+            }
+            return null;
+          }, 15000);
+
+          if (focusTarget) {
+            console.log("[YT Switcher] Found target input. Activating focus...", focusTarget);
+            focusTarget.scrollIntoView({ behavior: "smooth", block: "center" });
+            await sleep(200);
+
+            focusTarget.focus();
+            focusTarget.dispatchEvent(new Event("focus", { bubbles: true }));
+            focusTarget.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+            focusTarget.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+            focusTarget.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+            if (typeof focusTarget.click === "function") {
+              focusTarget.click();
+            }
+
+            try {
+              if (focusTarget.isContentEditable) {
+                const range = document.createRange();
+                const sel = window.getSelection();
+                range.selectNodeContents(focusTarget);
+                range.collapse(false);
+                sel.removeAllRanges();
+                sel.addRange(range);
+              } else if (typeof focusTarget.setSelectionRange === "function") {
+                const len = focusTarget.value?.length || 0;
+                focusTarget.setSelectionRange(len, len);
+              }
+            } catch (e) {}
+
+            console.log("✅ [YT Switcher] Element focused successfully!");
+          }
+        } catch (err) {
+          console.log("[YT Switcher] No chat input found on this page.");
+        }
       }
     }
   }

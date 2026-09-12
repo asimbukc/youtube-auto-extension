@@ -624,6 +624,13 @@
       Switch
       <span class="tab-dot" id="switchTabDot"></span>
     </button>
+    <button class="tab-btn tab-subscribe" data-tab="subscribeTab">
+      <svg style="width:12px;height:12px;fill:currentColor;" viewBox="0 0 24 24">
+        <path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h12v12z"/>
+      </svg>
+      Subscribe
+      <span class="tab-dot" id="subscribeTabDot"></span>
+    </button>
     <button class="tab-btn tab-create" data-tab="createTab">
       <svg style="width:12px;height:12px;fill:currentColor;" viewBox="0 0 24 24">
         <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
@@ -677,6 +684,39 @@
 
     <div class="button-group">
       <button class="btn-start" id="startBtn">Start Automation</button>
+    </div>
+  </div>
+
+  <!-- TAB 1.5: Subscribe (Input fields + Start button only, Free/Busy status) -->
+  <div class="tab-content" id="subscribeTab">
+    <div class="tab-status-banner">
+      <span class="tab-status-label">Tab Status</span>
+      <span class="tab-status-pill status-free" id="subscribeTabStatus">Free</span>
+    </div>
+
+    <div class="form-group">
+      <label for="subscribeUrl">Target Subscribe URL</label>
+      <input
+        type="text"
+        id="subscribeUrl"
+        placeholder="https://www.youtube.com/@ChannelName"
+        spellcheck="false"
+      />
+    </div>
+
+    <div class="row">
+      <div class="form-group">
+        <label for="subStartIndex">Start Index</label>
+        <input type="number" id="subStartIndex" placeholder="0" min="0" max="500" />
+      </div>
+      <div class="form-group">
+        <label for="subEndIndex">End Index</label>
+        <input type="number" id="subEndIndex" placeholder="19" min="0" max="500" />
+      </div>
+    </div>
+
+    <div class="button-group">
+      <button class="btn-start" id="startSubBtn">Start Subscribe</button>
     </div>
   </div>
 
@@ -776,6 +816,22 @@
         <button class="btn-cancel" id="cancelSwitchBtn" disabled>
           <svg style="width:12px;height:12px;fill:currentColor;" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
           Cancel Switch & Chat
+        </button>
+      </div>
+
+      <!-- Operation 1.5: Subscribe -->
+      <div class="track-card" id="trackCardSubscribe">
+        <div class="track-card-header">
+          <div class="track-card-title switch-title">
+            <svg viewBox="0 0 24 24"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h12v12z"/></svg>
+            Subscribe
+          </div>
+          <span class="tab-status-pill status-free" id="tracksSubscribeStatus">Free</span>
+        </div>
+        <div class="track-card-info" id="tracksSubscribeInfo">Idle - No active subscribe automation.</div>
+        <button class="btn-cancel" id="cancelSubscribeBtn" disabled>
+          <svg style="width:12px;height:12px;fill:currentColor;" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          Cancel Subscribe
         </button>
       </div>
 

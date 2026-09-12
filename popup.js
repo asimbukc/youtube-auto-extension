@@ -8,6 +8,14 @@ const startBtn = document.getElementById("startBtn");
 const switchTabStatus = document.getElementById("switchTabStatus");
 const switchTabDot = document.getElementById("switchTabDot");
 
+// Subscribe Elements
+const subscribeUrlInput = document.getElementById("subscribeUrl");
+const subStartIndexInput = document.getElementById("subStartIndex");
+const subEndIndexInput = document.getElementById("subEndIndex");
+const startSubBtn = document.getElementById("startSubBtn");
+const subscribeTabStatus = document.getElementById("subscribeTabStatus");
+const subscribeTabDot = document.getElementById("subscribeTabDot");
+
 // Create Channel Elements
 const channelNameInput = document.getElementById("channelName");
 const channelUsernameInput = document.getElementById("channelUsername");
@@ -33,6 +41,11 @@ const trackCardSwitch = document.getElementById("trackCardSwitch");
 const tracksSwitchStatus = document.getElementById("tracksSwitchStatus");
 const tracksSwitchInfo = document.getElementById("tracksSwitchInfo");
 const cancelSwitchBtn = document.getElementById("cancelSwitchBtn");
+
+const trackCardSubscribe = document.getElementById("trackCardSubscribe");
+const tracksSubscribeStatus = document.getElementById("tracksSubscribeStatus");
+const tracksSubscribeInfo = document.getElementById("tracksSubscribeInfo");
+const cancelSubscribeBtn = document.getElementById("cancelSubscribeBtn");
 
 const trackCardCreate = document.getElementById("trackCardCreate");
 const tracksCreateStatus = document.getElementById("tracksCreateStatus");
@@ -84,6 +97,7 @@ function checkActiveTab() {
     chrome.storage.local.get(
       [
         "isRunning",
+        "automationMode",
         "isDeleting",
         "isDeletingPaused",
         "isCreatingChannel",
@@ -107,10 +121,11 @@ function checkActiveTab() {
 }
 
 function updateUI(state) {
-  const isSwitchBusy = Boolean(state.isRunning);
+  const isSwitchBusy = Boolean(state.isRunning && state.automationMode !== "subscribe");
+  const isSubscribeBusy = Boolean(state.isRunning && state.automationMode === "subscribe");
   const isCreateBusy = Boolean(state.isCreatingChannel);
   const isDeleteBusy = Boolean(state.isDeleting || state.isDeletingPaused);
-  const isAnyBusy = isSwitchBusy || isCreateBusy || isDeleteBusy;
+  const isAnyBusy = isSwitchBusy || isSubscribeBusy || isCreateBusy || isDeleteBusy;
 
   const currentIndex = state.currentIndex ?? 0;
   const startIndex = state.startIndex ?? 0;
@@ -129,6 +144,16 @@ function updateUI(state) {
     switchTabDot.className = `tab-dot ${isSwitchBusy ? "busy" : ""}`;
   }
   startBtn.disabled = isAnyBusy;
+
+  // Tab 1.5: Subscribe
+  if (subscribeTabStatus) {
+    subscribeTabStatus.textContent = isSubscribeBusy ? "Busy" : "Free";
+    subscribeTabStatus.className = `tab-status-pill ${isSubscribeBusy ? "status-busy" : "status-free"}`;
+  }
+  if (subscribeTabDot) {
+    subscribeTabDot.className = `tab-dot ${isSubscribeBusy ? "busy" : ""}`;
+  }
+  if (startSubBtn) startSubBtn.disabled = isAnyBusy;
 
   // Tab 2: Create Channel
   if (createTabStatus) {
@@ -203,6 +228,11 @@ function updateUI(state) {
     statusText.textContent = customStatus;
     statusText.style.color = "var(--success)";
     indexBadge.textContent = `Channel: ${currentIndex}/${endIndex}`;
+  } else if (isSubscribeBusy) {
+    statusDot.classList.add("active");
+    statusText.textContent = customStatus;
+    statusText.style.color = "var(--success)";
+    indexBadge.textContent = `Channel: ${currentIndex}/${endIndex}`;
   } else {
     statusDot.className = "status-dot";
     statusText.textContent = customStatus;
@@ -213,12 +243,25 @@ function updateUI(state) {
   // Operation Card 1: Switch & Chat
   tracksSwitchStatus.textContent = isSwitchBusy ? "Busy" : "Free";
   tracksSwitchStatus.className = `tab-status-pill ${isSwitchBusy ? "status-busy" : "status-free"}`;
-  trackCardSwitch.classList.toggle("busy", isSwitchBusy);
-  cancelSwitchBtn.disabled = !isSwitchBusy;
+  if (trackCardSwitch) trackCardSwitch.classList.toggle("busy", isSwitchBusy);
+  if (cancelSwitchBtn) cancelSwitchBtn.disabled = !isSwitchBusy;
   if (isSwitchBusy) {
-    tracksSwitchInfo.textContent = `Processing Channel #${currentIndex} (Range: ${startIndex} → ${endIndex})`;
+    if (tracksSwitchInfo) tracksSwitchInfo.textContent = `Processing Channel #${currentIndex} (Range: ${startIndex} → ${endIndex})`;
   } else {
-    tracksSwitchInfo.textContent = "Idle - No active channel switching.";
+    if (tracksSwitchInfo) tracksSwitchInfo.textContent = "Idle - No active channel switching.";
+  }
+
+  // Operation Card 1.5: Subscribe
+  if (tracksSubscribeStatus) {
+    tracksSubscribeStatus.textContent = isSubscribeBusy ? "Busy" : "Free";
+    tracksSubscribeStatus.className = `tab-status-pill ${isSubscribeBusy ? "status-busy" : "status-free"}`;
+  }
+  if (trackCardSubscribe) trackCardSubscribe.classList.toggle("busy", isSubscribeBusy);
+  if (cancelSubscribeBtn) cancelSubscribeBtn.disabled = !isSubscribeBusy;
+  if (isSubscribeBusy) {
+    if (tracksSubscribeInfo) tracksSubscribeInfo.textContent = `Processing Channel #${currentIndex} (Range: ${startIndex} → ${endIndex})`;
+  } else {
+    if (tracksSubscribeInfo) tracksSubscribeInfo.textContent = "Idle - No active subscribe automation.";
   }
 
   // Operation Card 2: Channel Creation
@@ -313,11 +356,36 @@ startBtn.addEventListener("click", () => {
     chatUrl,
     startIndex,
     endIndex,
+    automationMode: "chat",
   });
 
   // Switch to Tracks tab to monitor live data
   switchTab("tracksTab");
 });
+
+// Start Subscribe automation
+if (startSubBtn) {
+  startSubBtn.addEventListener("click", () => {
+    const chatUrl = subscribeUrlInput.value.trim() || DEFAULT_URL;
+    const startIndex = subStartIndexInput.value.trim() !== "" ? parseInt(subStartIndexInput.value, 10) : 0;
+    const endIndex = subEndIndexInput.value.trim() !== "" ? parseInt(subEndIndexInput.value, 10) : 19;
+
+    if (endIndex < startIndex) {
+      alert("End Index must be greater than or equal to Start Index.");
+      return;
+    }
+
+    chrome.runtime.sendMessage({
+      action: "start_automation",
+      chatUrl,
+      startIndex,
+      endIndex,
+      automationMode: "subscribe",
+    });
+
+    switchTab("tracksTab");
+  });
+}
 
 // Start YouTube Channel Creation
 createChannelBtn.addEventListener("click", () => {
@@ -409,17 +477,36 @@ resumeDeleteBtn.addEventListener("click", () => {
 // ==============================================================
 
 // 1. Cancel Switch & Chat
-cancelSwitchBtn.addEventListener("click", () => {
-  chrome.runtime.sendMessage({
-    action: "stop_automation",
-  });
+if (cancelSwitchBtn) {
+  cancelSwitchBtn.addEventListener("click", () => {
+    chrome.runtime.sendMessage({
+      action: "stop_automation",
+    });
 
-  updateUI({
-    isRunning: false,
-    currentIndex: 0,
-    statusText: "Switch & Chat automation cancelled by user",
+    updateUI({
+      isRunning: false,
+      automationMode: "",
+      currentIndex: 0,
+      statusText: "Switch & Chat automation cancelled by user",
+    });
   });
-});
+}
+
+// 1.5 Cancel Subscribe
+if (cancelSubscribeBtn) {
+  cancelSubscribeBtn.addEventListener("click", () => {
+    chrome.runtime.sendMessage({
+      action: "stop_automation",
+    });
+
+    updateUI({
+      isRunning: false,
+      automationMode: "",
+      currentIndex: 0,
+      statusText: "Subscribe automation cancelled by user",
+    });
+  });
+}
 
 // 2. Cancel Channel Creation
 cancelCreateBtn.addEventListener("click", () => {

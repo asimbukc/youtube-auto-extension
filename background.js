@@ -541,7 +541,7 @@ async function handleStopChannelCreation() {
 // SWITCH & CHAT AUTOMATION
 // ==============================================================
 
-async function handleStartAutomation({ chatUrl, startIndex, endIndex }) {
+async function handleStartAutomation({ chatUrl, startIndex, endIndex, automationMode = "chat" }) {
   handleStopAutomation(); // Reset any existing active timers
 
   isRunning = true;
@@ -551,6 +551,7 @@ async function handleStartAutomation({ chatUrl, startIndex, endIndex }) {
     chatUrl: (chatUrl || config.chatUrl).trim(),
     startIndex: parseInt(startIndex, 10) || 0,
     endIndex: parseInt(endIndex, 10) || 0,
+    automationMode: automationMode,
   };
 
   const totalTabs = Math.max(0, config.endIndex - config.startIndex + 1);
@@ -566,10 +567,11 @@ async function handleStartAutomation({ chatUrl, startIndex, endIndex }) {
     startIndex: config.startIndex,
     endIndex: config.endIndex,
     liveChatUrl: config.chatUrl,
+    automationMode: config.automationMode,
     statusText: `Launching Channel #${config.startIndex} (Range: ${config.startIndex} → ${config.endIndex})...`,
   });
 
-  addActivityLog(`Started Switch & Chat: Channels ${config.startIndex} to ${config.endIndex}`, "info");
+  addActivityLog(`Started ${config.automationMode === "subscribe" ? "Subscribe" : "Switch & Chat"}: Channels ${config.startIndex} to ${config.endIndex}`, "info");
 
   // Launch initial tab
   await launchTabForIndex(config.startIndex);
