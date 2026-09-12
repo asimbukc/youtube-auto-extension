@@ -934,6 +934,14 @@ function handleStopSubscribing() {
   });
 }
 
+function handleTabClosed(tabId) {
+  if (!activeJobs[tabId]) return;
+
+  const job = activeJobs[tabId];
+  console.warn(`[Background] Tab ${tabId} was closed (Channel #${job.index}). Advancing...`);
+
+  clearTimeout(job.watchdogTimer);
+
   const nextIndex = job.index + 1;
   delete activeJobs[tabId];
 
