@@ -718,51 +718,8 @@
     currentUrl.includes("youtube.com")
   ) {
     if (!currentUrl.includes("channel_switcher")) {
-      const storageState = await new Promise(resolve => 
-        chrome.storage.local.get(["isSubscribing", "currentIndex"], resolve)
-      );
-      
-      if (storageState.isSubscribing) {
-        console.log("[YT Subscribing] Target channel page loaded. Searching for Subscribe button...");
-        await waitForPageReady();
-        
-        try {
-          // Find the subscribe button based on provided HTML
-          const subButton = await waitForDeep(() => {
-            const buttons = querySelectorDeep('button.ytSpecButtonShapeNextHost, button[aria-label^="Subscribe"]');
-            return buttons.find(btn => {
-              const aria = (btn.getAttribute("aria-label") || "").toLowerCase();
-              const textContent = (btn.textContent || "").toLowerCase();
-              const isSub = textContent.includes("subscribe") && aria.includes("subscribe");
-              // ensure we don't click if it's already "Subscribed" or "Unsubscribe"
-              const isAlreadySubbed = textContent.includes("subscribed") || textContent.includes("unsubscribe");
-              return isSub && !isAlreadySubbed;
-            });
-          }, 15000);
-          
-          if (subButton) {
-            console.log("[YT Subscribing] Found subscribe button. Clicking...");
-            await smartClick(subButton);
-            console.log("✅ [YT Subscribing] Subscribed successfully!");
-            // Short delay to allow YouTube backend to process
-            await sleep(1500);
-          } else {
-            console.log("[YT Subscribing] Subscribe button not found or already subscribed.");
-          }
-        } catch (err) {
-          console.log("[YT Subscribing] Error finding subscribe button:", err);
-        }
-        
-        // Always notify background to continue
-        try {
-          chrome.runtime.sendMessage({
-            action: "channel_subscribed",
-            index: storageState.currentIndex || 0
-          });
-        } catch (e) {}
-      } else {
-        console.log("[YT Switcher] Target page loaded. Searching for chat/text input to focus...");
-        await waitForPageReady();
+      console.log("[YT Switcher] Target page loaded. Searching for chat/text input to focus...");
+      await waitForPageReady();
 
       try {
         const inputSelectors = [
@@ -825,7 +782,6 @@
       } catch (err) {
         console.log("[YT Switcher] No chat input found on this page.");
       }
-      } // End else
     }
   }
 

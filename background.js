@@ -2,12 +2,6 @@
 
 let isRunning = false;
 let isCreatingChannel = false;
-let isSubscribing = false;
-let subConfig = {
-  subUrl: "",
-  startIndex: 0,
-  endIndex: 19,
-};
 let creationConfig = {
   channelName: "Messi",
   username: "Lion_________________1_Messi",
@@ -29,7 +23,6 @@ let batchCompletionTriggered = false;
 let BATCH_SIZE = 5;
 
 let activeJobs = {}; // tabId -> job data & watchdog timer
-let activeSubJobs = {}; // tabId -> sub job data
 let config = {
   chatUrl: "https://www.youtube.com/live_chat?is_popout=1&v=5FW9ZVMR_7M",
   startIndex: 0,
@@ -65,15 +58,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === "stop_automation") {
     handleStopAutomation();
     sendResponse({ status: "stopped" });
-  } else if (message.action === "start_subscribing") {
-    handleStartSubscribing(message);
-    sendResponse({ status: "started" });
-  } else if (message.action === "stop_subscribing") {
-    handleStopSubscribing();
-    sendResponse({ status: "stopped" });
-  } else if (message.action === "channel_subscribed") {
-    handleChannelSubscribed(tabId, message.index);
-    sendResponse({ status: "ack" });
   } else if (message.action === "start_channel_creation") {
     handleStartChannelCreation(message);
     sendResponse({ status: "started_channel_creation" });
@@ -115,19 +99,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleDeleteChannelsError(message.error);
     sendResponse({ status: "ack" });
   } else if (message.action === "channel_clicked") {
-    // Determine which job this belongs to
-    if (activeJobs[tabId]) {
-      handleChannelClicked(tabId, message.index);
-    } else if (activeSubJobs[tabId]) {
-      handleSubChannelClicked(tabId, message.index);
-    }
+    handleChannelClicked(tabId, message.index);
     sendResponse({ status: "ack" });
   } else if (message.action === "channel_error") {
-    if (activeJobs[tabId]) {
-      handleChannelError(tabId, message.index, message.error);
-    } else if (activeSubJobs[tabId]) {
-      handleSubChannelError(tabId, message.index, message.error);
-    }
+    handleChannelError(tabId, message.index, message.error);
     sendResponse({ status: "ack" });
   } else if (message.action === "channel_out_of_bounds") {
     handleOutOfBounds(tabId);
@@ -158,9 +133,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (activeJobs[tabId]) {
     handleTabClosed(tabId);
-  }
-  if (activeSubJobs[tabId]) {
-    handleSubTabClosed(tabId);
   }
   // NOTE: We intentionally do NOT mark batch tabs done here.
   // Closing all batch tabs is done inside checkBatchCompletion itself, and doing it
@@ -208,21 +180,6 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   ) {
     console.log(`[Background] Tab ${tabId} navigated away from channel_switcher to: ${tab.url}. Redirecting to chat...`);
     completeJobAndRedirect(tabId);
-  }
-
-  // Same logic for subscribing
-  if (activeSubJobs[tabId]) {
-    const subJob = activeSubJobs[tabId];
-    if (
-      subJob.channelClicked &&
-      !subJob.redirectHandled &&
-      tab.url &&
-      !tab.url.includes("channel_switcher") &&
-      !isChatOrTargetUrl(tab.url, subJob.subUrl)
-    ) {
-      console.log(`[Background] Tab ${tabId} navigated away from channel_switcher to: ${tab.url}. Redirecting to sub URL...`);
-      completeSubJobAndRedirect(tabId);
-    }
   }
 });
 
@@ -756,191 +713,6 @@ async function completeJobAndRedirect(tabId) {
   } catch (e) {
     console.warn(`[Background] Could not update tab ${tabId}:`, e);
   }
-}
-
-// ==============================================================
-// SUBSCRIBE CHANNEL AUTOMATION
-// ==============================================================
-
-async function handleStartSubscribing({ subUrl, startIndex, endIndex }) {
-  handleStopSubscribing();
-
-  isSubscribing = true;
-  activeSubJobs = {};
-
-  subConfig = {
-    subUrl: (subUrl || subConfig.subUrl).trim(),
-    startIndex: parseInt(startIndex, 10) || 0,
-    endIndex: parseInt(endIndex, 10) || 0,
-  };
-
-  const totalTabs = Math.max(0, subConfig.endIndex - subConfig.startIndex + 1);
-  console.log(`[Background] Starting subscribe automation: Channels ${subConfig.startIndex} to ${subConfig.endIndex}`);
-
-  await chrome.storage.local.set({
-    isSubscribing: true,
-    isRunning: false,
-    isCreatingChannel: false,
-    isDeleting: false,
-    currentIndex: subConfig.startIndex,
-    startIndex: subConfig.startIndex,
-    endIndex: subConfig.endIndex,
-    subUrl: subConfig.subUrl,
-    statusText: `Launching Channel #${subConfig.startIndex} (Range: ${subConfig.startIndex} → ${subConfig.endIndex})...`,
-  });
-
-  addActivityLog(`Started Subscribing: Channels ${subConfig.startIndex} to ${subConfig.endIndex}`, "info");
-
-  await launchSubTabForIndex(subConfig.startIndex);
-}
-
-async function launchSubTabForIndex(index) {
-  if (!isSubscribing || index > subConfig.endIndex) {
-    if (isSubscribing) {
-      isSubscribing = false;
-      await chrome.storage.local.set({
-        isSubscribing: false,
-        statusText: `Completed channels ${subConfig.startIndex} to ${subConfig.endIndex}!`,
-      });
-      addActivityLog(`Completed subscribing channels ${subConfig.startIndex} to ${subConfig.endIndex}!`, "success");
-    }
-    return;
-  }
-
-  const switcherUrl = `https://www.youtube.com/channel_switcher?next=${encodeURIComponent(
-    subConfig.subUrl
-  )}#target_index=${index}&sub_url=${encodeURIComponent(subConfig.subUrl)}`;
-
-  await chrome.storage.local.set({
-    currentIndex: index,
-    statusText: `Processing Sub for Channel #${index}...`,
-  });
-  addActivityLog(`Processing Sub for Channel #${index}`, "info");
-
-  try {
-    const tab = await chrome.tabs.create({ url: switcherUrl, active: true });
-    const tabId = tab.id;
-
-    const watchdogTimer = setTimeout(() => {
-      handleSubJobTimeout(tabId);
-    }, TAB_WATCHDOG_TIMEOUT_MS);
-
-    activeSubJobs[tabId] = {
-      index,
-      subUrl: subConfig.subUrl,
-      channelClicked: false,
-      redirectHandled: false,
-      tabId,
-      watchdogTimer,
-    };
-  } catch (err) {
-    console.error(`[Background] Failed to open sub tab:`, err);
-    scheduleNextSub(index + 1);
-  }
-}
-
-async function handleSubChannelClicked(tabId, index) {
-  if (!tabId || !activeSubJobs[tabId]) return;
-  const job = activeSubJobs[tabId];
-  job.channelClicked = true;
-  addActivityLog(`Channel #${index} switched. Redirecting to channel page...`, "success");
-
-  setTimeout(() => {
-    if (activeSubJobs[tabId] && !activeSubJobs[tabId].redirectHandled) {
-      completeSubJobAndRedirect(tabId);
-    }
-  }, 700);
-}
-
-async function handleSubChannelError(tabId, index, errorMsg) {
-  addActivityLog(`Channel #${index} error: ${errorMsg}`, "error");
-  if (tabId && activeSubJobs[tabId]) {
-    clearTimeout(activeSubJobs[tabId].watchdogTimer);
-    delete activeSubJobs[tabId];
-  }
-  scheduleNextSub(index + 1);
-}
-
-async function handleSubJobTimeout(tabId) {
-  if (!activeSubJobs[tabId]) return;
-  const job = activeSubJobs[tabId];
-  clearTimeout(job.watchdogTimer);
-  
-  if (!job.redirectHandled) {
-    job.redirectHandled = true;
-    try {
-      await chrome.tabs.update(tabId, { url: job.subUrl });
-    } catch (e) {}
-  }
-}
-
-async function completeSubJobAndRedirect(tabId) {
-  if (!activeSubJobs[tabId]) return;
-  const job = activeSubJobs[tabId];
-  job.redirectHandled = true;
-
-  try {
-    await chrome.tabs.update(tabId, { url: job.subUrl });
-  } catch (err) {
-    console.error("[Background] Failed redirect to sub URL:", err);
-  }
-}
-
-async function handleChannelSubscribed(tabId, index) {
-  if (!activeSubJobs[tabId]) return;
-  const job = activeSubJobs[tabId];
-  
-  addActivityLog(`Successfully clicked subscribe for Channel #${job.index}`, "success");
-  
-  clearTimeout(job.watchdogTimer);
-  delete activeSubJobs[tabId];
-  
-  try {
-    await chrome.tabs.remove(tabId);
-  } catch (e) {}
-  
-  scheduleNextSub(job.index + 1);
-}
-
-function scheduleNextSub(nextIndex) {
-  setTimeout(() => {
-    launchSubTabForIndex(nextIndex);
-  }, AUTOMATION_STEP_DELAY_MS);
-}
-
-function handleSubTabClosed(tabId) {
-  if (!activeSubJobs[tabId]) return;
-  const job = activeSubJobs[tabId];
-  console.warn(`[Background] Sub Tab ${tabId} closed.`);
-  clearTimeout(job.watchdogTimer);
-  const nextIndex = job.index + 1;
-  delete activeSubJobs[tabId];
-  scheduleNextSub(nextIndex);
-}
-
-function handleStopSubscribing() {
-  isSubscribing = false;
-  for (const tabId of Object.keys(activeSubJobs)) {
-    const job = activeSubJobs[tabId];
-    if (job.watchdogTimer) clearTimeout(job.watchdogTimer);
-    try {
-      chrome.tabs.remove(parseInt(tabId, 10));
-    } catch (e) {}
-  }
-  activeSubJobs = {};
-  chrome.storage.local.set({
-    isSubscribing: false,
-    statusText: "Subscribe automation stopped.",
-  });
-}
-
-function handleTabClosed(tabId) {
-  if (!activeJobs[tabId]) return;
-
-  const job = activeJobs[tabId];
-  console.warn(`[Background] Tab ${tabId} was closed (Channel #${job.index}). Advancing...`);
-
-  clearTimeout(job.watchdogTimer);
 
   const nextIndex = job.index + 1;
   delete activeJobs[tabId];
