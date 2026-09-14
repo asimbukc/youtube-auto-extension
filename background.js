@@ -23,8 +23,13 @@ let batchCompletionTriggered = false;
 let BATCH_SIZE = 5;
 
 // Batched-parallel deletion state
-let deletionBatchTabIds = new Set();
-let DELETION_BATCH_SIZE = 3;
+// deletionBatchMap: { [tabId]: { targetIdx, watchdogTimer, role } }
+let deletionBatchMap = {};
+let deletionCompletedTotal = 0;
+let isDeletionActive = false;
+let scoutReportReceived = false;
+const DELETION_BATCH_MAX_SIZE = 3;
+const DELETION_WATCHDOG_TIMEOUT_MS = 65000;
 
 let activeJobs = {}; // tabId -> job data & watchdog timer
 let config = {
@@ -102,6 +107,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === "delete_channels_error") {
     handleDeleteChannelsError(message.error);
     sendResponse({ status: "ack" });
+  } else if (message.action === "report_channel_count") {
+    handleReportChannelCount(tabId, message.count);
+    sendResponse({ status: "ack" });
+  } else if (message.action === "get_deletion_tab_params") {
+    const requestingTabId = tabId;
+    const tabEntry = deletionBatchMap[requestingTabId];
+    const targetIdx = tabEntry ? tabEntry.targetIdx : 0;
+    sendResponse({ targetIdx });
   } else if (message.action === "deletion_out_of_bounds") {
     handleDeletionOutOfBounds(tabId);
     sendResponse({ status: "ack" });
@@ -773,53 +786,64 @@ async function handleOutOfBounds(tabId) {
 }
 
 // ==============================================================
-// BRAND ACCOUNT DELETION ORCHESTRATION
+// BRAND ACCOUNT DELETION ORCHESTRATION (SCOUT-TAB & DYNAMIC SIZING)
 // ==============================================================
-
-let stopDeletionAfterBatch = false;
 
 async function handleStartDeleteChannels() {
   handleStopAutomation();
 
   console.log("[Background] Starting Brand Account / Channel Deletion automation...");
+  isDeletionActive = true;
+  deletionCompletedTotal = 0;
 
   await chrome.storage.local.set({
     isDeleting: true,
     isDeletingPaused: false,
     isRunning: false,
     isCreatingChannel: false,
-    statusText: "Starting deletion on Google Brand Accounts...",
+    statusText: "Opening Google Brand Accounts (Detecting channels)...",
   });
-  addActivityLog("Starting deletion on Google Brand Accounts...", "info");
+  addActivityLog("Starting Brand Account deletion...", "info");
 
-  stopDeletionAfterBatch = false;
-  launchDeletionBatch(true);
+  startDeletionBatch(true);
 }
 
 async function handleResumeDeleteChannels() {
   console.log("[Background] Resuming Brand Account / Channel Deletion automation...");
+  isDeletionActive = true;
   await chrome.storage.local.set({
     isDeleting: true,
     isDeletingPaused: false,
     statusText: "Resuming channel deletion...",
   });
   addActivityLog("Resumed Brand Account deletion", "info");
+
+  // If no tabs currently running, launch batch
+  if (Object.keys(deletionBatchMap).length === 0) {
+    startDeletionBatch(true);
+  }
 }
 
 async function handleStopDeleteChannels() {
   console.log("[Background] Channel deletion stopped by user.");
+  isDeletionActive = false;
+
+  for (const tid of Object.keys(deletionBatchMap)) {
+    if (deletionBatchMap[tid]?.watchdogTimer) {
+      clearTimeout(deletionBatchMap[tid].watchdogTimer);
+    }
+    try {
+      await chrome.tabs.remove(Number(tid));
+    } catch (e) {}
+  }
+  deletionBatchMap = {};
+
   await chrome.storage.local.set({
     isDeleting: false,
     isDeletingPaused: false,
     statusText: "Channel deletion stopped",
   });
   addActivityLog("Brand Account deletion cancelled by user", "warning");
-
-  // Close all deletion batch tabs
-  for (const tabId of deletionBatchTabIds) {
-    try { await chrome.tabs.remove(tabId); } catch (e) {}
-  }
-  deletionBatchTabIds.clear();
 }
 
 async function handleDeleteChannelStatus(statusText) {
@@ -833,6 +857,7 @@ async function handleDeleteChannelStatus(statusText) {
 
 async function handleDeleteChannelsCompleted(count = 0) {
   console.log(`[Background] All channels deleted successfully! Total: ${count}`);
+  isDeletionActive = false;
   await chrome.storage.local.set({
     isDeleting: false,
     isDeletingPaused: false,
@@ -843,6 +868,7 @@ async function handleDeleteChannelsCompleted(count = 0) {
 
 async function handleDeleteChannelsError(errorMessage) {
   console.warn(`[Background] Deletion error: ${errorMessage}`);
+  isDeletionActive = false;
   await chrome.storage.local.set({
     isDeleting: false,
     isDeletingPaused: false,
@@ -851,27 +877,94 @@ async function handleDeleteChannelsError(errorMessage) {
   addActivityLog(`Deletion error: ${errorMessage}`, "error");
 }
 
-async function launchDeletionBatch(isInitial = false) {
-  console.log(`[Background] Launching deletion batch of size ${DELETION_BATCH_SIZE}...`);
-  deletionBatchTabIds.clear();
-  
-  for (let i = 0; i < DELETION_BATCH_SIZE; i++) {
+async function startDeletionBatch(isInitial = false) {
+  if (!isDeletionActive) return;
+
+  console.log("[Background] Launching Scout Tab (Worker 0)...");
+
+  // Clean up any old timers
+  for (const tid of Object.keys(deletionBatchMap)) {
+    if (deletionBatchMap[tid]?.watchdogTimer) {
+      clearTimeout(deletionBatchMap[tid].watchdogTimer);
+    }
+  }
+  deletionBatchMap = {};
+  scoutReportReceived = false;
+
+  try {
+    const url = "https://myaccount.google.com/brandaccounts#auto_delete=true&delete_idx=0";
+    const scoutTab = await chrome.tabs.create({ url, active: isInitial });
+
+    const watchdogTimer = setTimeout(() => {
+      handleDeletionTabWatchdog(scoutTab.id);
+    }, DELETION_WATCHDOG_TIMEOUT_MS);
+
+    deletionBatchMap[scoutTab.id] = {
+      targetIdx: 0,
+      role: "scout_and_worker",
+      watchdogTimer,
+    };
+    console.log(`[Background] Opened Scout Tab ${scoutTab.id} (assigned targetIdx: 0)`);
+  } catch (e) {
+    console.error("[Background] Failed to open Scout Tab", e);
+    handleDeleteChannelsError("Failed to open Brand Accounts tab: " + e.message);
+  }
+}
+
+async function handleReportChannelCount(tabId, count) {
+  if (!isDeletionActive) return;
+  if (scoutReportReceived) return;
+  scoutReportReceived = true;
+
+  console.log(`[Background] Scout tab ${tabId} reported ${count} available channel(s).`);
+
+  if (count <= 0) {
+    console.log("[Background] 0 channels remaining. Deletion complete!");
+    if (deletionBatchMap[tabId]) {
+      clearTimeout(deletionBatchMap[tabId].watchdogTimer);
+      delete deletionBatchMap[tabId];
+    }
     try {
-      const url = `https://myaccount.google.com/brandaccounts#auto_delete=true&delete_idx=${i}`;
-      const tab = await chrome.tabs.create({ url, active: (isInitial && i === 0) });
-      deletionBatchTabIds.add(tab.id);
-      console.log(`[Background] Opened deletion tab ${tab.id} for index ${i}`);
+      await chrome.tabs.remove(tabId);
+    } catch (e) {}
+    await handleDeleteChannelsCompleted(deletionCompletedTotal);
+    return;
+  }
+
+  const totalTabsNeeded = Math.min(count, DELETION_BATCH_MAX_SIZE);
+  console.log(`[Background] Dynamically opening ${totalTabsNeeded} tab(s) for ${count} remaining channel(s).`);
+
+  await chrome.storage.local.set({
+    statusText: `Deleting batch of ${totalTabsNeeded} channel(s) (${count} remaining)...`,
+  });
+
+  // Open remaining worker tabs (indices 1 to totalTabsNeeded - 1)
+  for (let idx = 1; idx < totalTabsNeeded; idx++) {
+    try {
+      const url = `https://myaccount.google.com/brandaccounts#auto_delete=true&delete_idx=${idx}`;
+      const workerTab = await chrome.tabs.create({ url, active: false });
+
+      const watchdogTimer = setTimeout(() => {
+        handleDeletionTabWatchdog(workerTab.id);
+      }, DELETION_WATCHDOG_TIMEOUT_MS);
+
+      deletionBatchMap[workerTab.id] = {
+        targetIdx: idx,
+        role: "worker",
+        watchdogTimer,
+      };
+      console.log(`[Background] Opened worker tab ${workerTab.id} (assigned targetIdx: ${idx})`);
     } catch (e) {
-      console.error(`[Background] Failed to open deletion tab for index ${i}`, e);
+      console.error(`[Background] Failed to open worker tab for idx ${idx}`, e);
     }
   }
 }
 
 async function handleDeletionOutOfBounds(tabId) {
-  if (deletionBatchTabIds.has(tabId)) {
+  if (deletionBatchMap[tabId]) {
     console.log(`[Background] Deletion tab ${tabId} reported out of bounds.`);
-    stopDeletionAfterBatch = true;
-    deletionBatchTabIds.delete(tabId);
+    clearTimeout(deletionBatchMap[tabId].watchdogTimer);
+    delete deletionBatchMap[tabId];
     try {
       await chrome.tabs.remove(tabId);
     } catch (e) {}
@@ -880,20 +973,27 @@ async function handleDeletionOutOfBounds(tabId) {
 }
 
 async function handleDeletionTabCompleted(tabId) {
-  if (deletionBatchTabIds.has(tabId)) {
+  if (deletionBatchMap[tabId]) {
     console.log(`[Background] Deletion tab ${tabId} completed successfully.`);
-    deletionBatchTabIds.delete(tabId);
+    clearTimeout(deletionBatchMap[tabId].watchdogTimer);
+    delete deletionBatchMap[tabId];
+    deletionCompletedTotal++;
+
+    addActivityLog(`Deleted brand channel successfully (${deletionCompletedTotal} total)`, "success");
+
     try {
       await chrome.tabs.remove(tabId);
     } catch (e) {}
+
     checkDeletionBatchCompletion();
   }
 }
 
 async function handleDeletionTabError(tabId, errorMessage) {
-  if (deletionBatchTabIds.has(tabId)) {
+  if (deletionBatchMap[tabId]) {
     console.warn(`[Background] Deletion tab ${tabId} reported error: ${errorMessage}`);
-    deletionBatchTabIds.delete(tabId);
+    clearTimeout(deletionBatchMap[tabId].watchdogTimer);
+    delete deletionBatchMap[tabId];
     try {
       await chrome.tabs.remove(tabId);
     } catch (e) {}
@@ -901,18 +1001,31 @@ async function handleDeletionTabError(tabId, errorMessage) {
   }
 }
 
-function checkDeletionBatchCompletion() {
-  if (deletionBatchTabIds.size === 0) {
-    console.log(`[Background] Deletion batch complete.`);
-    if (!stopDeletionAfterBatch) {
-      launchDeletionBatch();
-    } else {
-      console.log(`[Background] Deletion out of bounds reached. Stopping.`);
-      chrome.storage.local.set({
-        isDeleting: false,
-        statusText: "Finished (All available channels deleted)"
-      });
-      addActivityLog("Finished (All available channels deleted)", "info");
+async function handleDeletionTabWatchdog(tabId) {
+  if (deletionBatchMap[tabId]) {
+    console.warn(`[Background] Deletion tab ${tabId} timed out in watchdog (65s). Closing.`);
+    delete deletionBatchMap[tabId];
+    try {
+      await chrome.tabs.remove(tabId);
+    } catch (e) {}
+    checkDeletionBatchCompletion();
+  }
+}
+
+async function checkDeletionBatchCompletion() {
+  const remaining = Object.keys(deletionBatchMap).length;
+  console.log(`[Background] Checking batch completion. Remaining tabs in current batch: ${remaining}`);
+
+  if (remaining === 0) {
+    if (!isDeletionActive) {
+      console.log("[Background] Deletion was stopped or completed. Not launching next batch.");
+      return;
+    }
+
+    console.log("[Background] All tabs in current batch finished! Waiting 2s before launching next batch...");
+    await sleep(2000);
+    if (isDeletionActive) {
+      startDeletionBatch(false);
     }
   }
 }
@@ -939,11 +1052,17 @@ async function handleStopAutomation() {
   }
   activeJobs = {};
 
+  isDeletionActive = false;
   // Close all deletion batch tabs
-  for (const tabId of deletionBatchTabIds) {
-    try { await chrome.tabs.remove(tabId); } catch (e) {}
+  for (const tid of Object.keys(deletionBatchMap)) {
+    if (deletionBatchMap[tid]?.watchdogTimer) {
+      clearTimeout(deletionBatchMap[tid].watchdogTimer);
+    }
+    try {
+      await chrome.tabs.remove(Number(tid));
+    } catch (e) {}
   }
-  deletionBatchTabIds.clear();
+  deletionBatchMap = {};
 
   await chrome.storage.local.set({
     isRunning: false,

@@ -186,14 +186,14 @@ function updateUI(state) {
   } else {
     deleteChannelsBtn.style.display = "inline-flex";
     resumeDeleteBtn.style.display = "none";
-    deleteChannelsBtn.disabled = isAnyBusy || !isOnBrandAccountsPage;
+    deleteChannelsBtn.disabled = isAnyBusy;
 
     if (deleteBtnNotice) {
-      if (isOnBrandAccountsPage) {
-        deleteBtnNotice.textContent = "✅ Active on Google Brand Accounts";
-        deleteBtnNotice.style.color = "#00e676";
+      if (isDeleteBusy) {
+        deleteBtnNotice.textContent = "⏳ Brand Account deletion in progress...";
+        deleteBtnNotice.style.color = "#ffb300";
       } else {
-        deleteBtnNotice.textContent = "⚠️ Active only on https://myaccount.google.com/brandaccounts";
+        deleteBtnNotice.textContent = "🌐 Automatically opens Google Brand Accounts on start";
         deleteBtnNotice.style.color = "#8d96a7";
       }
     }
@@ -416,13 +416,8 @@ createChannelBtn.addEventListener("click", () => {
 
 // Start Brand Accounts Deletion
 deleteChannelsBtn.addEventListener("click", () => {
-  if (!isOnBrandAccountsPage) {
-    alert("This action only works when your active tab is on: https://myaccount.google.com/brandaccounts");
-    return;
-  }
-
   const confirmed = confirm(
-    "⚠️ WARNING: This will automatically delete your Brand Account channels sequentially on this page.\n\nAre you sure you want to proceed?"
+    "⚠️ WARNING: This will automatically delete your Brand Account channels sequentially in batches.\n\nAre you sure you want to proceed?"
   );
 
   if (!confirmed) return;
@@ -431,14 +426,7 @@ deleteChannelsBtn.addEventListener("click", () => {
     isDeleting: true,
     isRunning: false,
     isCreatingChannel: false,
-    statusText: "Starting channel deletion loop...",
-  });
-
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    const activeTab = tabs && tabs[0];
-    if (activeTab?.id) {
-      chrome.tabs.sendMessage(activeTab.id, { action: "start_deletion_now" }).catch(() => {});
-    }
+    statusText: "Starting Brand Account deletion...",
   });
 
   chrome.runtime.sendMessage({

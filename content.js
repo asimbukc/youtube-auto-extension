@@ -834,6 +834,7 @@
     let isDeletingActive = false;
     let isExecutingCycle = false;
     let isWaitingForBatch = false;
+    let unrecognizedAttempts = 0;
 
     const logStatus = (step, msg) => {
       console.log(`[DeleteChannel] [Step ${step}] ${msg}`);
@@ -871,6 +872,57 @@
       if (!urlOrHref) return null;
       const match = urlOrHref.match(/brandaccounts\/([0-9]+)/);
       return match ? match[1] : null;
+    };
+
+    // Helper: Find all unique, unprocessed Brand Account items on list page
+    const getBrandAccountItems = () => {
+      const skippedSet = getSkippedAccounts();
+      const items = [];
+      const seenAccountIds = new Set();
+
+      // Look for distinct <li> containers
+      const candidateLis = Array.from(
+        document.querySelectorAll("li.K6ZZTd, ul[role='list'] > li, li")
+      );
+
+      for (const li of candidateLis) {
+        const link = li.querySelector("a[href*='brandaccounts/'][href*='/view'], a[href*='brandaccounts/'], a[href*='/view']");
+        if (!link) continue;
+
+        const href = link.getAttribute("href") || "";
+        const accountId = extractAccountId(href);
+        if (!accountId || seenAccountIds.has(accountId) || skippedSet.has(accountId)) continue;
+
+        seenAccountIds.add(accountId);
+        items.push({
+          li,
+          link,
+          accountId,
+          href,
+        });
+      }
+
+      // Fallback: If <li> structure didn't yield items, deduplicate <a> tags directly
+      if (items.length === 0) {
+        const allLinks = Array.from(
+          document.querySelectorAll("a[href*='brandaccounts/'][href*='/view'], a[href*='brandaccounts/']")
+        );
+        for (const a of allLinks) {
+          const href = a.getAttribute("href") || "";
+          const accountId = extractAccountId(href);
+          if (accountId && !seenAccountIds.has(accountId) && !skippedSet.has(accountId)) {
+            seenAccountIds.add(accountId);
+            items.push({
+              li: a.closest("li") || a,
+              link: a,
+              accountId,
+              href,
+            });
+          }
+        }
+      }
+
+      return items;
     };
 
     const isAuthChallengePage = () => {
@@ -1053,6 +1105,7 @@
         const isDeleteUrl = url.includes("/delete") || url.includes("deleteaccount") || url.includes("delete");
 
         if (hasCheckboxes || (isDeleteUrl && hasSubmitBtn)) {
+          unrecognizedAttempts = 0;
           const accountId = extractAccountId(url);
           if (accountId) markAccountSkipped(accountId);
 
@@ -1076,7 +1129,7 @@
               const isEnabled = !b.disabled && b.getAttribute("aria-disabled") !== "true";
               return isMatch && isEnabled;
             });
-          }, 10000).catch(() => null);
+          }, 15000).catch(() => null);
 
           if (submitBtn) {
             logStatus("10", "Clicking final 'Delete Account' submit button...");
@@ -1092,14 +1145,14 @@
             }
             
             // Add a safety buffer in case the DOM updated but network is slow
-            await sleep(2000);
+            await sleep(2500);
             
             if (sessionStorage.getItem("deletion_submitted") === "true") {
               sessionStorage.removeItem("deletion_submitted");
               try { chrome.runtime.sendMessage({ action: "deletion_tab_completed" }); } catch (e) {}
             }
           } else {
-            logStatus("Recovery", "Final submit button not found. Notifying background to close tab...");
+            logStatus("Recovery", "Final submit button not found after 15s. Notifying background to close tab...");
             try { chrome.runtime.sendMessage({ action: "deletion_tab_error", error: "Missing submit button" }); } catch (e) {}
           }
           isExecutingCycle = false;
@@ -1110,6 +1163,7 @@
         // STATE B: BRAND ACCOUNT VIEW PAGE (/view or "Delete account" button)
         // -------------------------------------------------------------
         if (url.includes("/view")) {
+          unrecognizedAttempts = 0;
           logStatus("3-4", "Brand account view page. Finding 'Delete account' button...");
           await sleep(1200);
 
@@ -1130,7 +1184,7 @@
                 href.includes("deleteaccount")
               );
             });
-          }, 8000).catch(() => null);
+          }, 20000).catch(() => null);
 
           if (deleteBtn) {
             logStatus("4", "Found 'Delete account' button. Clicking...");
@@ -1140,16 +1194,16 @@
 
             await smartClick(deleteBtn, "'Delete account' button");
 
-            // Fallback: If SPA route didn't change after 1.5s and href is available, navigate
-            await sleep(1500);
+            // Fallback: If SPA route didn't change after 2s and href is available, navigate
+            await sleep(2000);
             if (window.location.href.includes("/view") && href) {
               window.location.href = href;
             }
           } else {
-            // Element not found on view page -> Mark skipped & notify background
+            // Element not found on view page after 20s
             const accountId = extractAccountId(url);
             if (accountId) markAccountSkipped(accountId);
-            logStatus("Recovery", "Could not find 'Delete account' button. Notifying background to close tab...");
+            logStatus("Recovery", "Could not find 'Delete account' button after 20s. Notifying background to close tab...");
             try { chrome.runtime.sendMessage({ action: "deletion_tab_error", error: "Missing button" }); } catch (e) {}
           }
           isExecutingCycle = false;
@@ -1159,54 +1213,27 @@
         // -------------------------------------------------------------
         // STATE C: BRAND ACCOUNTS LIST PAGE (/brandaccounts)
         // -------------------------------------------------------------
-        if (url.includes("brandaccounts")) {
+        if (url.includes("brandaccounts") && !url.includes("/view") && !url.includes("/delete")) {
+          unrecognizedAttempts = 0;
           logStatus("1", "Scanning brand account <li> items on list page...");
           await sleep(1500);
 
-          // Find all brand account link elements
-          const allLinks = Array.from(
-            document.querySelectorAll(
-              "li.K6ZZTd a[href*='brandaccounts/'], li a[href*='brandaccounts/'], a[href*='brandaccounts/'][href*='/view'], a[href*='/view']"
-            )
-          ).filter((el) => {
-            const href = el.getAttribute("href") || "";
-            return href.includes("brandaccounts/") && (href.includes("/view") || href.includes("view"));
-          });
+          const availableItems = getBrandAccountItems();
+          console.log(`[DeleteChannel] Found ${availableItems.length} unprocessed unique brand account(s).`);
 
-          const skippedSet = getSkippedAccounts();
-          // Filter out accounts that were already processed or returned 404
-          const availableLinks = allLinks.filter((el) => {
-            const id = extractAccountId(el.getAttribute("href"));
-            return id && !skippedSet.has(id);
-          });
-
-          console.log(`[DeleteChannel] Total links: ${allLinks.length}, Unprocessed valid links: ${availableLinks.length}`);
-
-          if (availableLinks.length === 0) {
-            // Check if there are ghost links remaining that were already skipped
-            if (allLinks.length > 0) {
-              const alreadyReloaded = sessionStorage.getItem("auto_delete_reloaded") === "true";
-              if (!alreadyReloaded) {
-                sessionStorage.setItem("auto_delete_reloaded", "true");
-                logStatus("Sync", "All visible items are cached/skipped. Refreshing page for fresh list...");
-                await sleep(1500);
-                window.location.reload();
-                isExecutingCycle = false;
-                return;
-              }
-            }
-
-            // Double check after 2 seconds to avoid race condition with slow rendering
-            await sleep(2000);
-            const retryAll = document.querySelectorAll(
-              "a[href*='brandaccounts/'][href*='/view'], li.K6ZZTd a"
-            );
-            const retryAvailable = Array.from(retryAll).filter((el) => {
-              const id = extractAccountId(el.getAttribute("href"));
-              return id && !skippedSet.has(id);
+          // Report count to background script so Scout Tab can dynamically open remaining tabs
+          try {
+            chrome.runtime.sendMessage({
+              action: "report_channel_count",
+              count: availableItems.length,
             });
+          } catch (e) {}
 
-            if (retryAvailable.length === 0) {
+          if (availableItems.length === 0) {
+            // Check if items are still rendering
+            await sleep(2000);
+            const retryItems = getBrandAccountItems();
+            if (retryItems.length === 0) {
               logStatus("Finished", "🎉 All Brand Account channels have been successfully deleted!");
               sessionStorage.removeItem("auto_delete_active");
               sessionStorage.removeItem("skipped_brand_accounts");
@@ -1215,42 +1242,56 @@
                 isDeleting: false,
                 statusText: "All channels deleted successfully!",
               });
-              chrome.runtime.sendMessage({ action: "delete_channels_completed" });
+              try { chrome.runtime.sendMessage({ action: "delete_channels_completed" }); } catch (e) {}
               isExecutingCycle = false;
               return;
             }
           }
 
-          // Reset reload flag once fresh items are available
-          sessionStorage.removeItem("auto_delete_reloaded");
+          // Fetch assigned targetIdx from background script
+          let deleteIdx = 0;
+          try {
+            const response = await new Promise((res) => {
+              chrome.runtime.sendMessage({ action: "get_deletion_tab_params" }, (r) => {
+                if (chrome.runtime.lastError) res(null);
+                else res(r);
+              });
+            });
+            if (response && typeof response.targetIdx === "number") {
+              deleteIdx = response.targetIdx;
+            } else {
+              deleteIdx = parseInt(INITIAL_HASH_PARAMS.get("delete_idx"), 10) || 0;
+            }
+          } catch (e) {
+            deleteIdx = parseInt(INITIAL_HASH_PARAMS.get("delete_idx"), 10) || 0;
+          }
 
-          // Parse delete_idx from INITIAL_HASH_PARAMS because Google SPA router strips custom hash params
-          const deleteIdx = parseInt(INITIAL_HASH_PARAMS.get("delete_idx"), 10) || 0;
+          console.log(`[DeleteChannel] Tab assigned index ${deleteIdx} (li ${deleteIdx + 1}). Available items: ${availableItems.length}`);
 
-          if (deleteIdx >= availableLinks.length) {
-            logStatus("Finished", `Tab assigned index ${deleteIdx} but only ${availableLinks.length} links remain. Out of bounds.`);
-            try { chrome.runtime.sendMessage({ action: "deletion_out_of_bounds" }); } catch(e) {}
+          if (deleteIdx >= availableItems.length) {
+            logStatus("Finished", `Tab assigned index ${deleteIdx} but only ${availableItems.length} items remain. Reporting out of bounds.`);
+            try { chrome.runtime.sendMessage({ action: "deletion_out_of_bounds" }); } catch (e) {}
             isExecutingCycle = false;
             return;
           }
 
-          const targetLink = availableLinks[deleteIdx];
+          const targetItem = availableItems[deleteIdx];
+          if (targetItem) {
+            logStatus("1-2", `[Tab -> li ${deleteIdx + 1}] Targeting brand account [${targetItem.accountId}]: ${targetItem.href}`);
+            // Mark account skipped in this tab so subsequent cycles don't re-target it
+            markAccountSkipped(targetItem.accountId);
 
-          if (targetLink) {
-            const targetHref = targetLink.getAttribute("href");
-            const targetId = extractAccountId(targetHref);
-            logStatus("1-2", `Targeting brand account [${targetId}]: ${targetHref}`);
-            await smartClick(targetLink, "Brand Account list link");
+            await smartClick(targetItem.link, `Brand Account li ${deleteIdx + 1} link`);
 
             // Fallback if SPA doesn't trigger URL transition
-            await sleep(1500);
+            await sleep(2000);
             if (
-              window.location.href.endsWith("/brandaccounts") ||
-              window.location.href.endsWith("/brandaccounts/") ||
-              window.location.href.includes("brandaccounts#auto_delete=true")
+              window.location.href.includes("brandaccounts") &&
+              !window.location.href.includes("/view") &&
+              !window.location.href.includes("/delete")
             ) {
-              if (targetHref) {
-                window.location.href = targetHref;
+              if (targetItem.href) {
+                window.location.href = targetItem.href;
               }
             }
           }
@@ -1259,21 +1300,29 @@
         }
 
         // -------------------------------------------------------------
-        // STATE D: UNRECOGNIZED / UNKNOWN PAGE STATE
+        // STATE D: UNRECOGNIZED / TRANSITIONAL PAGE STATE
         // -------------------------------------------------------------
-        logStatus("Recovery", "No intended element found on this page. Notifying background...");
-        await sleep(2000);
-        if (url.endsWith("brandaccounts") || url.endsWith("brandaccounts/") || url.includes("brandaccounts#auto_delete=true")) {
+        unrecognizedAttempts++;
+        if (unrecognizedAttempts < 10) {
+          logStatus("Wait", `Page is transitioning/loading (${unrecognizedAttempts}/10). Waiting...`);
+          await sleep(1500);
+          isExecutingCycle = false;
+          return;
+        }
+
+        // Only after 10 failed attempts (15+ seconds) treat as stuck
+        logStatus("Recovery", "Page state unrecognized after 10 attempts. Notifying background...");
+        unrecognizedAttempts = 0;
+        if (url.includes("brandaccounts")) {
           window.location.href = "https://myaccount.google.com/brandaccounts#auto_delete=true";
         } else {
-          try { chrome.runtime.sendMessage({ action: "deletion_tab_error", error: "Unrecognized page state" }); } catch(e) {}
+          try { chrome.runtime.sendMessage({ action: "deletion_tab_error", error: "Unrecognized page state" }); } catch (e) {}
         }
       } catch (err) {
         console.error("[DeleteChannel] Cycle error:", err);
         logStatus("Error", `${err.message}. Notifying background...`);
-        // If an error happens anywhere, redirect back to brand accounts list to continue
         await sleep(1500);
-        if (window.location.href.endsWith("brandaccounts") || window.location.href.endsWith("brandaccounts/") || window.location.href.includes("brandaccounts#auto_delete=true")) {
+        if (window.location.href.includes("brandaccounts")) {
           window.location.href = "https://myaccount.google.com/brandaccounts#auto_delete=true";
         } else {
           try { chrome.runtime.sendMessage({ action: "deletion_tab_error", error: err.message }); } catch(e) {}
