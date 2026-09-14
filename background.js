@@ -22,6 +22,10 @@ let batchCompletionTriggered = false;
 
 let BATCH_SIZE = 5;
 
+// Batched-parallel deletion state
+let deletionBatchTabIds = new Set();
+let DELETION_BATCH_SIZE = 3;
+
 let activeJobs = {}; // tabId -> job data & watchdog timer
 let config = {
   chatUrl: "https://www.youtube.com/live_chat?is_popout=1&v=5FW9ZVMR_7M",
@@ -97,6 +101,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ status: "ack" });
   } else if (message.action === "delete_channels_error") {
     handleDeleteChannelsError(message.error);
+    sendResponse({ status: "ack" });
+  } else if (message.action === "deletion_out_of_bounds") {
+    handleDeletionOutOfBounds(tabId);
+    sendResponse({ status: "ack" });
+  } else if (message.action === "deletion_tab_completed") {
+    handleDeletionTabCompleted(tabId);
+    sendResponse({ status: "ack" });
+  } else if (message.action === "deletion_tab_error") {
+    handleDeletionTabError(tabId, message.error);
     sendResponse({ status: "ack" });
   } else if (message.action === "channel_clicked") {
     handleChannelClicked(tabId, message.index);
@@ -763,6 +776,8 @@ async function handleOutOfBounds(tabId) {
 // BRAND ACCOUNT DELETION ORCHESTRATION
 // ==============================================================
 
+let stopDeletionAfterBatch = false;
+
 async function handleStartDeleteChannels() {
   handleStopAutomation();
 
@@ -777,31 +792,8 @@ async function handleStartDeleteChannels() {
   });
   addActivityLog("Starting deletion on Google Brand Accounts...", "info");
 
-  try {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    const currentTab = tabs && tabs[0];
-
-    if (currentTab?.url && currentTab.url.startsWith("https://myaccount.google.com/brandaccounts")) {
-      // Update active tab directly
-      await chrome.tabs.update(currentTab.id, {
-        url: "https://myaccount.google.com/brandaccounts#auto_delete=true",
-      });
-    } else {
-      // Open new tab if not already on brandaccounts
-      await chrome.tabs.create({
-        url: "https://myaccount.google.com/brandaccounts#auto_delete=true",
-        active: true,
-      });
-    }
-  } catch (err) {
-    console.error("[Background] Failed to initialize Google Brand Accounts deletion:", err);
-    await chrome.storage.local.set({
-      isDeleting: false,
-      isDeletingPaused: false,
-      statusText: "Error initializing deletion",
-    });
-    addActivityLog(`Error initializing deletion: ${err.message}`, "error");
-  }
+  stopDeletionAfterBatch = false;
+  launchDeletionBatch();
 }
 
 async function handleResumeDeleteChannels() {
@@ -822,6 +814,12 @@ async function handleStopDeleteChannels() {
     statusText: "Channel deletion stopped",
   });
   addActivityLog("Brand Account deletion cancelled by user", "warning");
+
+  // Close all deletion batch tabs
+  for (const tabId of deletionBatchTabIds) {
+    try { await chrome.tabs.remove(tabId); } catch (e) {}
+  }
+  deletionBatchTabIds.clear();
 }
 
 async function handleDeleteChannelStatus(statusText) {
@@ -853,6 +851,72 @@ async function handleDeleteChannelsError(errorMessage) {
   addActivityLog(`Deletion error: ${errorMessage}`, "error");
 }
 
+async function launchDeletionBatch() {
+  console.log(`[Background] Launching deletion batch of size ${DELETION_BATCH_SIZE}...`);
+  deletionBatchTabIds.clear();
+  
+  for (let i = 0; i < DELETION_BATCH_SIZE; i++) {
+    try {
+      const url = `https://myaccount.google.com/brandaccounts#auto_delete=true&delete_idx=${i}`;
+      const tab = await chrome.tabs.create({ url, active: false });
+      deletionBatchTabIds.add(tab.id);
+      console.log(`[Background] Opened deletion tab ${tab.id} for index ${i}`);
+    } catch (e) {
+      console.error(`[Background] Failed to open deletion tab for index ${i}`, e);
+    }
+  }
+}
+
+async function handleDeletionOutOfBounds(tabId) {
+  if (deletionBatchTabIds.has(tabId)) {
+    console.log(`[Background] Deletion tab ${tabId} reported out of bounds.`);
+    stopDeletionAfterBatch = true;
+    deletionBatchTabIds.delete(tabId);
+    try {
+      await chrome.tabs.remove(tabId);
+    } catch (e) {}
+    checkDeletionBatchCompletion();
+  }
+}
+
+async function handleDeletionTabCompleted(tabId) {
+  if (deletionBatchTabIds.has(tabId)) {
+    console.log(`[Background] Deletion tab ${tabId} completed successfully.`);
+    deletionBatchTabIds.delete(tabId);
+    try {
+      await chrome.tabs.remove(tabId);
+    } catch (e) {}
+    checkDeletionBatchCompletion();
+  }
+}
+
+async function handleDeletionTabError(tabId, errorMessage) {
+  if (deletionBatchTabIds.has(tabId)) {
+    console.warn(`[Background] Deletion tab ${tabId} reported error: ${errorMessage}`);
+    deletionBatchTabIds.delete(tabId);
+    try {
+      await chrome.tabs.remove(tabId);
+    } catch (e) {}
+    checkDeletionBatchCompletion();
+  }
+}
+
+function checkDeletionBatchCompletion() {
+  if (deletionBatchTabIds.size === 0) {
+    console.log(`[Background] Deletion batch complete.`);
+    if (!stopDeletionAfterBatch) {
+      launchDeletionBatch();
+    } else {
+      console.log(`[Background] Deletion out of bounds reached. Stopping.`);
+      chrome.storage.local.set({
+        isDeleting: false,
+        statusText: "Finished (All available channels deleted)"
+      });
+      addActivityLog("Finished (All available channels deleted)", "info");
+    }
+  }
+}
+
 async function handleStopAutomation() {
   console.log("[Background] All automations stopped.");
   const wasRunning = isRunning || isCreatingChannel;
@@ -874,6 +938,12 @@ async function handleStopAutomation() {
     }
   }
   activeJobs = {};
+
+  // Close all deletion batch tabs
+  for (const tabId of deletionBatchTabIds) {
+    try { await chrome.tabs.remove(tabId); } catch (e) {}
+  }
+  deletionBatchTabIds.clear();
 
   await chrome.storage.local.set({
     isRunning: false,

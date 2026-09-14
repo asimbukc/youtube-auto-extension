@@ -833,6 +833,7 @@
   ) {
     let isDeletingActive = false;
     let isExecutingCycle = false;
+    let isWaitingForBatch = false;
 
     const logStatus = (step, msg) => {
       console.log(`[DeleteChannel] [Step ${step}] ${msg}`);
@@ -997,7 +998,7 @@
     }
 
     async function runCycle() {
-      if (isExecutingCycle) return;
+      if (isExecutingCycle || isWaitingForBatch) return;
 
       isDeletingActive = await checkDeletionState();
       if (!isDeletingActive) return;
@@ -1026,9 +1027,13 @@
         if (is404OrErrorPage()) {
           const deadId = extractAccountId(url);
           if (deadId) markAccountSkipped(deadId);
-          logStatus("Recovery", `Detected 404/Error page for account [${deadId || "unknown"}]. Redirecting to Brand Accounts list...`);
+          logStatus("Recovery", `Detected 404/Error page for account [${deadId || "unknown"}]. Notifying background...`);
           await sleep(1500);
-          window.location.href = "https://myaccount.google.com/brandaccounts#auto_delete=true";
+          if (url.endsWith("brandaccounts") || url.endsWith("brandaccounts/") || url.includes("brandaccounts#auto_delete=true")) {
+            window.location.href = "https://myaccount.google.com/brandaccounts#auto_delete=true";
+          } else {
+            try { chrome.runtime.sendMessage({ action: "deletion_tab_error", error: "404 Error page" }); } catch(e) {}
+          }
           isExecutingCycle = false;
           return;
         }
@@ -1069,16 +1074,15 @@
           if (submitBtn) {
             logStatus("10", "Clicking final 'Delete Account' submit button...");
             await smartClick(submitBtn, "Final Delete Account Button");
-            logStatus("10", "Deletion submitted! Redirecting to Brand Accounts list...");
+            logStatus("10", "Deletion submitted! Notifying background to close tab...");
 
             // Allow Google backend to process deletion request (2.5s)
             await sleep(2500);
 
-            // Explicitly redirect back to the brand accounts list
-            window.location.href = "https://myaccount.google.com/brandaccounts#auto_delete=true";
+            try { chrome.runtime.sendMessage({ action: "deletion_tab_completed" }); } catch (e) {}
           } else {
-            logStatus("Recovery", "Final submit button not found. Redirecting to Brand Accounts...");
-            window.location.href = "https://myaccount.google.com/brandaccounts#auto_delete=true";
+            logStatus("Recovery", "Final submit button not found. Notifying background to close tab...");
+            try { chrome.runtime.sendMessage({ action: "deletion_tab_error", error: "Missing submit button" }); } catch (e) {}
           }
           isExecutingCycle = false;
           return;
@@ -1124,11 +1128,11 @@
               window.location.href = href;
             }
           } else {
-            // Element not found on view page -> Mark skipped & redirect back to brand accounts
+            // Element not found on view page -> Mark skipped & notify background
             const accountId = extractAccountId(url);
             if (accountId) markAccountSkipped(accountId);
-            logStatus("Recovery", "Could not find 'Delete account' button. Redirecting to Brand Accounts...");
-            window.location.href = "https://myaccount.google.com/brandaccounts#auto_delete=true";
+            logStatus("Recovery", "Could not find 'Delete account' button. Notifying background to close tab...");
+            try { chrome.runtime.sendMessage({ action: "deletion_tab_error", error: "Missing button" }); } catch (e) {}
           }
           isExecutingCycle = false;
           return;
@@ -1202,8 +1206,17 @@
           // Reset reload flag once fresh items are available
           sessionStorage.removeItem("auto_delete_reloaded");
 
-          // Grab the first UNPROCESSED brand account link from the list
-          const targetLink = availableLinks[0];
+          // Parse delete_idx from INITIAL_HASH_PARAMS because Google SPA router strips custom hash params
+          const deleteIdx = parseInt(INITIAL_HASH_PARAMS.get("delete_idx"), 10) || 0;
+
+          if (deleteIdx >= availableLinks.length) {
+            logStatus("Finished", `Tab assigned index ${deleteIdx} but only ${availableLinks.length} links remain. Out of bounds.`);
+            try { chrome.runtime.sendMessage({ action: "deletion_out_of_bounds" }); } catch(e) {}
+            isExecutingCycle = false;
+            return;
+          }
+
+          const targetLink = availableLinks[deleteIdx];
 
           if (targetLink) {
             const targetHref = targetLink.getAttribute("href");
@@ -1215,7 +1228,8 @@
             await sleep(1500);
             if (
               window.location.href.endsWith("/brandaccounts") ||
-              window.location.href.endsWith("/brandaccounts/")
+              window.location.href.endsWith("/brandaccounts/") ||
+              window.location.href.includes("brandaccounts#auto_delete=true")
             ) {
               if (targetHref) {
                 window.location.href = targetHref;
@@ -1229,16 +1243,22 @@
         // -------------------------------------------------------------
         // STATE D: UNRECOGNIZED / UNKNOWN PAGE STATE
         // -------------------------------------------------------------
-        logStatus("Recovery", "No intended element found on this page. Redirecting to Brand Accounts list...");
+        logStatus("Recovery", "No intended element found on this page. Notifying background...");
         await sleep(2000);
-        window.location.href = "https://myaccount.google.com/brandaccounts#auto_delete=true";
+        if (url.endsWith("brandaccounts") || url.endsWith("brandaccounts/") || url.includes("brandaccounts#auto_delete=true")) {
+          window.location.href = "https://myaccount.google.com/brandaccounts#auto_delete=true";
+        } else {
+          try { chrome.runtime.sendMessage({ action: "deletion_tab_error", error: "Unrecognized page state" }); } catch(e) {}
+        }
       } catch (err) {
         console.error("[DeleteChannel] Cycle error:", err);
-        logStatus("Error", `${err.message}. Redirecting to Brand Accounts...`);
+        logStatus("Error", `${err.message}. Notifying background...`);
         // If an error happens anywhere, redirect back to brand accounts list to continue
         await sleep(1500);
-        if (!window.location.href.endsWith("/brandaccounts") && !window.location.href.endsWith("/brandaccounts/")) {
+        if (window.location.href.endsWith("brandaccounts") || window.location.href.endsWith("brandaccounts/") || window.location.href.includes("brandaccounts#auto_delete=true")) {
           window.location.href = "https://myaccount.google.com/brandaccounts#auto_delete=true";
+        } else {
+          try { chrome.runtime.sendMessage({ action: "deletion_tab_error", error: err.message }); } catch(e) {}
         }
       } finally {
         isExecutingCycle = false;
