@@ -793,7 +793,7 @@ async function handleStartDeleteChannels() {
   addActivityLog("Starting deletion on Google Brand Accounts...", "info");
 
   stopDeletionAfterBatch = false;
-  launchDeletionBatch();
+  launchDeletionBatch(true);
 }
 
 async function handleResumeDeleteChannels() {
@@ -851,14 +851,14 @@ async function handleDeleteChannelsError(errorMessage) {
   addActivityLog(`Deletion error: ${errorMessage}`, "error");
 }
 
-async function launchDeletionBatch() {
+async function launchDeletionBatch(isInitial = false) {
   console.log(`[Background] Launching deletion batch of size ${DELETION_BATCH_SIZE}...`);
   deletionBatchTabIds.clear();
   
   for (let i = 0; i < DELETION_BATCH_SIZE; i++) {
     try {
       const url = `https://myaccount.google.com/brandaccounts#auto_delete=true&delete_idx=${i}`;
-      const tab = await chrome.tabs.create({ url, active: false });
+      const tab = await chrome.tabs.create({ url, active: (isInitial && i === 0) });
       deletionBatchTabIds.add(tab.id);
       console.log(`[Background] Opened deletion tab ${tab.id} for index ${i}`);
     } catch (e) {

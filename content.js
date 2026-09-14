@@ -1000,6 +1000,13 @@
     async function runCycle() {
       if (isExecutingCycle || isWaitingForBatch) return;
 
+      if (sessionStorage.getItem("deletion_submitted") === "true") {
+        sessionStorage.removeItem("deletion_submitted");
+        logStatus("Finished", "Detected successful deletion. Closing tab...");
+        try { chrome.runtime.sendMessage({ action: "deletion_tab_completed" }); } catch (e) {}
+        return;
+      }
+
       isDeletingActive = await checkDeletionState();
       if (!isDeletingActive) return;
 
@@ -1073,13 +1080,24 @@
 
           if (submitBtn) {
             logStatus("10", "Clicking final 'Delete Account' submit button...");
+            sessionStorage.setItem("deletion_submitted", "true");
             await smartClick(submitBtn, "Final Delete Account Button");
-            logStatus("10", "Deletion submitted! Notifying background to close tab...");
+            logStatus("10", "Deletion submitted! Waiting for Google to process...");
 
-            // Allow Google backend to process deletion request (2.5s)
-            await sleep(2500);
-
-            try { chrome.runtime.sendMessage({ action: "deletion_tab_completed" }); } catch (e) {}
+            // Wait up to 15s for the submit button to disappear or the page to unload
+            let waitTime = 0;
+            while(document.contains(submitBtn) && waitTime < 15000) {
+              await sleep(500);
+              waitTime += 500;
+            }
+            
+            // Add a safety buffer in case the DOM updated but network is slow
+            await sleep(2000);
+            
+            if (sessionStorage.getItem("deletion_submitted") === "true") {
+              sessionStorage.removeItem("deletion_submitted");
+              try { chrome.runtime.sendMessage({ action: "deletion_tab_completed" }); } catch (e) {}
+            }
           } else {
             logStatus("Recovery", "Final submit button not found. Notifying background to close tab...");
             try { chrome.runtime.sendMessage({ action: "deletion_tab_error", error: "Missing submit button" }); } catch (e) {}
