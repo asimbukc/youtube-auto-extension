@@ -1597,230 +1597,275 @@
     if (message.action === "execute_paste_and_enter") {
       (async () => {
         try {
-          const { text, selector, pressEnter, clickSubmit } = message;
-          console.log(`[Auto Paste] Received paste command for text: "${text}"`);
+          const { text, selector, pressEnter, clickSubmit, burstCount = 3, burstDelayMs = 800 } = message;
+          console.log(`[Auto Paste] Received paste command (${burstCount}x burst): "${text}"`);
 
-          let target = null;
-          if (selector && selector.trim()) {
-            const matches = querySelectorDeep(selector.trim());
-            target = matches.find((el) => el.offsetParent !== null || el.getBoundingClientRect().width > 0);
-          }
-
-          if (!target) {
-            const active = document.activeElement;
-            if (
-              active &&
-              active !== document.body &&
-              active !== document.documentElement &&
-              (active.tagName === "INPUT" ||
-                active.tagName === "TEXTAREA" ||
-                active.isContentEditable ||
-                active.getAttribute("contenteditable") === "true")
-            ) {
-              target = active;
-            }
-          }
-
-          if (!target) {
-            const candidateSelectors = [
-              'div#input[contenteditable="true"]',
-              'yt-live-chat-text-input-field-renderer #input',
-              'yt-live-chat-message-input-renderer #input',
-              '#input.yt-live-chat-text-input-field-renderer',
-              '#input[contenteditable="true"]',
-              '#contenteditable-root',
-              'ytd-commentbox #contenteditable-root',
-              '#comment-dialog #contenteditable-root',
-              'textarea[name="q"]',
-              'input[name="q"]',
-              'textarea.gLFyf',
-              'input.gLFyf',
-              'div[contenteditable="true"][role="textbox"]',
-              'div[contenteditable="true"]',
-              '[contenteditable="true"]',
-              'tp-yt-paper-input-container input',
-              'paper-input input',
-              'textarea',
-              'input[type="text"]:not([type="hidden"])',
-              'input[type="search"]',
-              'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"])',
-            ];
-
-            try {
-              const placeholder = querySelectorDeep("#placeholder-area, #simplebox-placeholder").find(
-                (el) => el.offsetParent !== null || el.getBoundingClientRect().width > 0
-              );
-              if (placeholder) {
-                placeholder.click();
-                await sleep(300);
-              }
-            } catch (e) {}
-
-            for (const sel of candidateSelectors) {
-              const found = querySelectorDeep(sel).find(
-                (el) => el.offsetParent !== null || (el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0)
-              );
-              if (found) {
-                target = found;
-                break;
-              }
-            }
-          }
-
-          if (!target) {
-            sendResponse({ success: false, error: "No editable input found on page" });
-            return;
-          }
-
-          target.scrollIntoView({ behavior: "instant", block: "center" });
-          target.focus();
-          target.dispatchEvent(new Event("focus", { bubbles: true }));
-          target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
-          target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
-          target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-          if (typeof target.click === "function") target.click();
-
-          await sleep(100);
-
-          // Simulated Ctrl+V paste event
-          try {
-            const pasteEvent = new ClipboardEvent("paste", {
-              bubbles: true,
-              cancelable: true,
-              composed: true,
-              clipboardData: new DataTransfer(),
-            });
-            pasteEvent.clipboardData.setData("text/plain", text);
-            target.dispatchEvent(pasteEvent);
-          } catch (e) {}
-
-          if (target.isContentEditable || target.getAttribute("contenteditable") === "true") {
-            const sel = window.getSelection();
-            const range = document.createRange();
-            range.selectNodeContents(target);
-            sel.removeAllRanges();
-            sel.addRange(range);
-
-            try {
-              document.execCommand("selectAll", false, null);
-              document.execCommand("delete", false, null);
-            } catch (e) {}
-
-            let inserted = false;
-            try {
-              inserted = document.execCommand("insertText", false, text);
-            } catch (e) {}
-
-            if (!inserted || !target.textContent.includes(text)) {
-              target.innerText = text;
-              target.textContent = text;
-            }
-
-            try {
-              target.dispatchEvent(
-                new InputEvent("input", {
-                  bubbles: true,
-                  composed: true,
-                  cancelable: true,
-                  data: text,
-                  inputType: "insertFromPaste",
-                })
-              );
-            } catch (e) {}
-
-            target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-            target.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-          } else {
-            target.value = "";
-            if (typeof target.select === "function") target.select();
-            try {
-              document.execCommand("selectAll", false, null);
-              document.execCommand("delete", false, null);
-            } catch (e) {}
-
-            let inserted = false;
-            try {
-              inserted = document.execCommand("insertText", false, text);
-            } catch (e) {}
-
-            if (!inserted || target.value !== text) {
-              const nativeSetter =
-                Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set ||
-                Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
-              if (nativeSetter) {
-                nativeSetter.call(target, text);
-              } else {
-                target.value = text;
-              }
-            }
-
-            try {
-              target.dispatchEvent(
-                new InputEvent("input", {
-                  bubbles: true,
-                  composed: true,
-                  cancelable: true,
-                  data: text,
-                  inputType: "insertFromPaste",
-                })
-              );
-            } catch (e) {}
-
-            target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-            target.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-          }
-
-          await sleep(120);
-
-          // Press Enter key
-          if (pressEnter) {
-            const enterInit = {
-              key: "Enter",
-              code: "Enter",
-              keyCode: 13,
-              which: 13,
-              charCode: 13,
-              bubbles: true,
-              cancelable: true,
-              composed: true,
-              view: window,
+          const querySelectorDeep = (sel, root = document) => {
+            const list = [];
+            const walk = (node) => {
+              if (!node) return;
+              try {
+                node.querySelectorAll(sel).forEach((el) => list.push(el));
+              } catch (e) {}
+              try {
+                node.querySelectorAll("*").forEach((el) => {
+                  if (el.shadowRoot) walk(el.shadowRoot);
+                  if (el.tagName === "IFRAME") {
+                    try {
+                      const doc = el.contentDocument || el.contentWindow?.document;
+                      if (doc) walk(doc);
+                    } catch (e) {}
+                  }
+                });
+              } catch (e) {}
             };
-            target.dispatchEvent(new KeyboardEvent("keydown", enterInit));
-            target.dispatchEvent(new KeyboardEvent("keypress", enterInit));
-            target.dispatchEvent(new KeyboardEvent("keyup", enterInit));
-          }
+            walk(root);
+            return list;
+          };
 
-          // Click submit/send button
-          if (clickSubmit) {
-            await sleep(100);
-            try {
-              const submitSelectors = [
-                'button[type="submit"]',
-                'input[type="submit"]',
-                'button[aria-label*="Send" i]',
-                'button[aria-label*="Search" i]',
-                'button[aria-label*="Comment" i]',
-                "#send-button button",
-                "yt-live-chat-send-button-renderer button",
-                "ytd-button-renderer#submit-button button",
-                "button.yt-spec-button-shape-next--filled",
-                "button.Tg7LZd",
+          const findTarget = () => {
+            let target = null;
+            if (selector && selector.trim()) {
+              const matches = querySelectorDeep(selector.trim());
+              target = matches.find((el) => el.offsetParent !== null || el.getBoundingClientRect().width > 0);
+            }
+
+            if (!target) {
+              const active = document.activeElement;
+              if (
+                active &&
+                active !== document.body &&
+                active !== document.documentElement &&
+                (active.tagName === "INPUT" ||
+                  active.tagName === "TEXTAREA" ||
+                  active.isContentEditable ||
+                  active.getAttribute("contenteditable") === "true")
+              ) {
+                target = active;
+              }
+            }
+
+            if (!target) {
+              const candidateSelectors = [
+                'div#input[contenteditable="true"]',
+                'yt-live-chat-text-input-field-renderer #input',
+                'yt-live-chat-message-input-renderer #input',
+                '#input.yt-live-chat-text-input-field-renderer',
+                '#input[contenteditable="true"]',
+                '#contenteditable-root',
+                'ytd-commentbox #contenteditable-root',
+                '#comment-dialog #contenteditable-root',
+                'textarea[name="q"]',
+                'input[name="q"]',
+                'textarea.gLFyf',
+                'input.gLFyf',
+                'div[contenteditable="true"][role="textbox"]',
+                'div[contenteditable="true"]',
+                '[contenteditable="true"]',
+                'tp-yt-paper-input-container input',
+                'paper-input input',
+                'textarea',
+                'input[type="text"]:not([type="hidden"])',
+                'input[type="search"]',
+                'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"])',
               ];
-              for (const btnSel of submitSelectors) {
-                const btns = querySelectorDeep(btnSel);
-                const activeBtn = btns.find(
-                  (b) => (b.offsetParent !== null || b.getBoundingClientRect().width > 0) && !b.disabled
+
+              try {
+                const placeholder = querySelectorDeep("#placeholder-area, #simplebox-placeholder").find(
+                  (el) => el.offsetParent !== null || el.getBoundingClientRect().width > 0
                 );
-                if (activeBtn) {
-                  activeBtn.click();
+                if (placeholder) placeholder.click();
+              } catch (e) {}
+
+              for (const sel of candidateSelectors) {
+                const found = querySelectorDeep(sel).find(
+                  (el) => el.offsetParent !== null || (el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0)
+                );
+                if (found) {
+                  target = found;
                   break;
                 }
               }
+            }
+            return target;
+          };
+
+          const totalBursts = Math.max(1, burstCount || 3);
+          const delayBetweenBursts = Math.max(50, burstDelayMs || 800);
+
+          let successfulPastes = 0;
+          let lastTagName = "";
+          let lastId = "";
+
+          for (let burstIdx = 0; burstIdx < totalBursts; burstIdx++) {
+            const target = findTarget();
+            if (!target) {
+              if (burstIdx === 0) {
+                sendResponse({ success: false, error: "No editable input found on page" });
+                return;
+              }
+              break;
+            }
+
+            lastTagName = target.tagName;
+            lastId = target.id;
+
+            target.scrollIntoView({ behavior: "instant", block: "center" });
+            target.focus();
+            target.dispatchEvent(new Event("focus", { bubbles: true }));
+            target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+            target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+            target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+            if (typeof target.click === "function") target.click();
+
+            await sleep(60);
+
+            // Simulated Ctrl+V paste event
+            try {
+              const pasteEvent = new ClipboardEvent("paste", {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                clipboardData: new DataTransfer(),
+              });
+              pasteEvent.clipboardData.setData("text/plain", text);
+              target.dispatchEvent(pasteEvent);
             } catch (e) {}
+
+            if (target.isContentEditable || target.getAttribute("contenteditable") === "true") {
+              const sel = window.getSelection();
+              const range = document.createRange();
+              range.selectNodeContents(target);
+              sel.removeAllRanges();
+              sel.addRange(range);
+
+              try {
+                document.execCommand("selectAll", false, null);
+                document.execCommand("delete", false, null);
+              } catch (e) {}
+
+              let inserted = false;
+              try {
+                inserted = document.execCommand("insertText", false, text);
+              } catch (e) {}
+
+              if (!inserted || !target.textContent.includes(text)) {
+                target.innerText = text;
+                target.textContent = text;
+              }
+
+              try {
+                target.dispatchEvent(
+                  new InputEvent("input", {
+                    bubbles: true,
+                    composed: true,
+                    cancelable: true,
+                    data: text,
+                    inputType: "insertFromPaste",
+                  })
+                );
+              } catch (e) {}
+
+              target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+              target.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+            } else {
+              target.value = "";
+              if (typeof target.select === "function") target.select();
+              try {
+                document.execCommand("selectAll", false, null);
+                document.execCommand("delete", false, null);
+              } catch (e) {}
+
+              let inserted = false;
+              try {
+                inserted = document.execCommand("insertText", false, text);
+              } catch (e) {}
+
+              if (!inserted || target.value !== text) {
+                const nativeSetter =
+                  Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set ||
+                  Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+                if (nativeSetter) {
+                  nativeSetter.call(target, text);
+                } else {
+                  target.value = text;
+                }
+              }
+
+              try {
+                target.dispatchEvent(
+                  new InputEvent("input", {
+                    bubbles: true,
+                    composed: true,
+                    cancelable: true,
+                    data: text,
+                    inputType: "insertFromPaste",
+                  })
+                );
+              } catch (e) {}
+
+              target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+              target.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+            }
+
+            await sleep(100);
+
+            // Press Enter key
+            if (pressEnter) {
+              const enterInit = {
+                key: "Enter",
+                code: "Enter",
+                keyCode: 13,
+                which: 13,
+                charCode: 13,
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                view: window,
+              };
+              target.dispatchEvent(new KeyboardEvent("keydown", enterInit));
+              target.dispatchEvent(new KeyboardEvent("keypress", enterInit));
+              target.dispatchEvent(new KeyboardEvent("keyup", enterInit));
+            }
+
+            // Click submit/send button
+            if (clickSubmit) {
+              await sleep(60);
+              try {
+                const submitSelectors = [
+                  'button[type="submit"]',
+                  'input[type="submit"]',
+                  'button[aria-label*="Send" i]',
+                  'button[aria-label*="Search" i]',
+                  'button[aria-label*="Comment" i]',
+                  "#send-button button",
+                  "yt-live-chat-send-button-renderer button",
+                  "ytd-button-renderer#submit-button button",
+                  "button.yt-spec-button-shape-next--filled",
+                  "button.Tg7LZd",
+                ];
+                for (const btnSel of submitSelectors) {
+                  const btns = querySelectorDeep(btnSel);
+                  const activeBtn = btns.find(
+                    (b) => (b.offsetParent !== null || b.getBoundingClientRect().width > 0) && !b.disabled
+                  );
+                  if (activeBtn) {
+                    activeBtn.click();
+                    break;
+                  }
+                }
+              } catch (e) {}
+            }
+
+            successfulPastes++;
+
+            if (burstIdx < totalBursts - 1) {
+              await sleep(delayBetweenBursts);
+            }
           }
 
-          console.log("✅ [Auto Paste] Finished paste and Enter execution on tab.");
-          sendResponse({ success: true, tag: target.tagName, id: target.id });
+          console.log(`✅ [Auto Paste] Finished ${successfulPastes}/${totalBursts} pastes on tab.`);
+          sendResponse({ success: true, count: successfulPastes, tag: lastTagName, id: lastId });
         } catch (err) {
           console.error("[Auto Paste] Error executing paste:", err);
           sendResponse({ success: false, error: err.message });

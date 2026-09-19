@@ -1103,7 +1103,6 @@ async function handleStopAutomation() {
 
 let isPasteRunning = false;
 let isPasteLooping = false;
-let pasteLoopTimer = null;
 let pasteConfig = {
   text: "",
   selector: "",
@@ -1111,54 +1110,55 @@ let pasteConfig = {
   urlFilter: "",
   pressEnter: true,
   clickSubmit: true,
-  isLoop: false,
-  loopIntervalSec: 5,
+  burstCount: 3,
+  burstDelayMs: 800,
+  breakIntervalSec: 10,
+  isLoop: true,
 };
 
 async function handleStartParallelPaste(params) {
   handleStopParallelPaste();
 
   isPasteRunning = true;
-  isPasteLooping = Boolean(params.isLoop);
-  pasteConfig = { ...params };
+  isPasteLooping = params.isLoop !== undefined ? Boolean(params.isLoop) : true;
+  pasteConfig = {
+    text: params.text || "",
+    selector: params.selector || "",
+    targetScope: params.targetScope || "all",
+    urlFilter: params.urlFilter || "",
+    pressEnter: params.pressEnter !== undefined ? params.pressEnter : true,
+    clickSubmit: params.clickSubmit !== undefined ? params.clickSubmit : true,
+    burstCount: Math.max(1, parseInt(params.burstCount, 10) || 3),
+    burstDelayMs: Math.max(50, parseInt(params.burstDelayMs, 10) || 800),
+    breakIntervalSec: Math.max(1, parseInt(params.breakIntervalSec, 10) || 10),
+    isLoop: isPasteLooping,
+  };
 
   await chrome.storage.local.set({
     isPasteRunning: true,
     isPasteLooping: isPasteLooping,
-    pasteInputText: params.text,
-    pasteTargetScope: params.targetScope,
-    pasteUrlFilter: params.urlFilter,
-    pasteSelector: params.selector,
-    pastePressEnter: params.pressEnter,
-    pasteClickSubmit: params.clickSubmit,
-    pasteIsLoop: params.isLoop,
-    pasteLoopInterval: params.loopIntervalSec,
-    statusText: `Starting parallel paste across open tabs...`,
+    pasteInputText: pasteConfig.text,
+    pasteTargetScope: pasteConfig.targetScope,
+    pasteUrlFilter: pasteConfig.urlFilter,
+    pasteSelector: pasteConfig.selector,
+    pastePressEnter: pasteConfig.pressEnter,
+    pasteClickSubmit: pasteConfig.clickSubmit,
+    pasteBurstCount: pasteConfig.burstCount,
+    pasteBurstDelay: pasteConfig.burstDelayMs,
+    pasteBreakSec: pasteConfig.breakIntervalSec,
+    pasteIsLoop: pasteConfig.isLoop,
+    statusText: `Starting parallel paste (${pasteConfig.burstCount}x burst loop)...`,
   });
 
-  addActivityLog(`Starting parallel background paste (Ctrl+V & Enter) [Scope: ${params.targetScope}]`, "info");
+  addActivityLog(
+    `Starting parallel background paste (${pasteConfig.burstCount}x burst/cycle, ${pasteConfig.breakIntervalSec}s break) [Scope: ${pasteConfig.targetScope}]`,
+    "info"
+  );
 
-  // Run immediately
-  await executeParallelPasteCycle();
-
-  // If loop is enabled, schedule recurring execution
-  if (isPasteLooping && isPasteRunning) {
-    const intervalMs = Math.max(1000, (params.loopIntervalSec || 5) * 1000);
-    pasteLoopTimer = setInterval(async () => {
-      if (isPasteRunning) {
-        await executeParallelPasteCycle();
-      } else {
-        clearInterval(pasteLoopTimer);
-      }
-    }, intervalMs);
-  }
+  runPasteBackgroundLoop();
 }
 
 function handleStopParallelPaste() {
-  if (pasteLoopTimer) {
-    clearInterval(pasteLoopTimer);
-    pasteLoopTimer = null;
-  }
   isPasteRunning = false;
   isPasteLooping = false;
 
@@ -1170,7 +1170,36 @@ function handleStopParallelPaste() {
   addActivityLog("Background paste stopped", "warning");
 }
 
-async function executeParallelPasteCycle() {
+async function runPasteBackgroundLoop() {
+  let cycleNum = 1;
+  while (isPasteRunning) {
+    console.log(`[Background] Starting paste cycle #${cycleNum}...`);
+    await executeParallelPasteCycle(cycleNum);
+
+    if (!isPasteRunning) break;
+    if (!isPasteLooping) {
+      isPasteRunning = false;
+      await chrome.storage.local.set({ isPasteRunning: false, isPasteLooping: false });
+      break;
+    }
+
+    // Break countdown interval
+    const breakSec = pasteConfig.breakIntervalSec || 10;
+    console.log(`[Background] Cycle #${cycleNum} complete. Resting for ${breakSec}s break...`);
+
+    for (let remaining = breakSec; remaining > 0; remaining--) {
+      if (!isPasteRunning) break;
+      const breakStatus = `Break: Next ${pasteConfig.burstCount}x burst in ${remaining}s... (Cycle #${cycleNum} done)`;
+      await chrome.storage.local.set({ statusText: breakStatus });
+      await sleep(1000);
+    }
+
+    if (!isPasteRunning) break;
+    cycleNum++;
+  }
+}
+
+async function executeParallelPasteCycle(cycleNum = 1) {
   if (!isPasteRunning) return;
 
   try {
@@ -1211,11 +1240,13 @@ async function executeParallelPasteCycle() {
       return;
     }
 
-    console.log(`[Background] Executing parallel paste on ${targetTabs.length} open tab(s)...`);
+    console.log(
+      `[Background] Cycle #${cycleNum}: Executing ${pasteConfig.burstCount}x parallel paste on ${targetTabs.length} open tab(s)...`
+    );
     await chrome.storage.local.set({
       pasteCompletedCount: 0,
       pasteTotalCount: targetTabs.length,
-      statusText: `Injecting paste & Enter across ${targetTabs.length} tab(s) in parallel...`,
+      statusText: `Cycle #${cycleNum}: Pasting ${pasteConfig.burstCount}x across ${targetTabs.length} tab(s) in parallel...`,
     });
 
     let completedCount = 0;
@@ -1231,6 +1262,8 @@ async function executeParallelPasteCycle() {
             selector: pasteConfig.selector,
             pressEnter: pasteConfig.pressEnter,
             clickSubmit: pasteConfig.clickSubmit,
+            burstCount: pasteConfig.burstCount,
+            burstDelayMs: pasteConfig.burstDelayMs,
           });
         } catch (msgErr) {
           // Fallback: If content script is not yet listening on this tab, dynamically inject worker function
@@ -1242,6 +1275,8 @@ async function executeParallelPasteCycle() {
               pasteConfig.selector,
               pasteConfig.pressEnter,
               pasteConfig.clickSubmit,
+              pasteConfig.burstCount,
+              pasteConfig.burstDelayMs,
             ],
           });
           response = injectionResults?.[0]?.result;
@@ -1249,8 +1284,8 @@ async function executeParallelPasteCycle() {
 
         completedCount++;
         const tabTitle = tab.title ? tab.title.substring(0, 30) : `Tab #${tab.id}`;
-        console.log(`[Background] Tab ${tab.id} ("${tabTitle}") completed paste.`);
-        addActivityLog(`[Tab ${tab.id}] Pasted & Pressed Enter on "${tabTitle}"`, "success");
+        console.log(`[Background] Tab ${tab.id} ("${tabTitle}") completed ${pasteConfig.burstCount}x paste burst.`);
+        addActivityLog(`[Tab ${tab.id}] Pasted ${pasteConfig.burstCount}x & Pressed Enter on "${tabTitle}"`, "success");
         await chrome.storage.local.set({ pasteCompletedCount: completedCount });
         return { tabId: tab.id, success: true, response };
       } catch (err) {
@@ -1263,28 +1298,28 @@ async function executeParallelPasteCycle() {
     await Promise.allSettled(workerPromises);
 
     const summaryText = isPasteLooping
-      ? `Loop active: Injected ${completedCount}/${targetTabs.length} tab(s). Repeating...`
-      : `Completed paste & Enter on ${completedCount}/${targetTabs.length} tab(s) in parallel!`;
+      ? `Cycle #${cycleNum} complete: ${completedCount}/${targetTabs.length} tab(s) (${pasteConfig.burstCount}x burst). Taking break...`
+      : `Completed ${pasteConfig.burstCount}x paste & Enter on ${completedCount}/${targetTabs.length} tab(s) in parallel!`;
 
     console.log(`[Background] ${summaryText}`);
     await chrome.storage.local.set({
       pasteCompletedCount: completedCount,
       pasteTotalCount: targetTabs.length,
       statusText: summaryText,
-      ...(isPasteLooping ? {} : { isPasteRunning: false }),
     });
 
     if (!isPasteLooping) {
       isPasteRunning = false;
+      await chrome.storage.local.set({ isPasteRunning: false });
       addActivityLog(summaryText, "success");
     }
   } catch (err) {
-    console.error("[Background] Global error during parallel paste:", err);
+    console.error("[Background] Global error during parallel paste cycle:", err);
   }
 }
 
 // Injected fallback worker that runs inside tab context
-function injectedPasteAndEnterWorker(text, selector, pressEnter, clickSubmit) {
+function injectedPasteAndEnterWorker(text, selector, pressEnter, clickSubmit, burstCount = 3, burstDelayMs = 800) {
   const querySelectorDeep = (sel, root = document) => {
     const list = [];
     const walk = (node) => {
@@ -1308,216 +1343,247 @@ function injectedPasteAndEnterWorker(text, selector, pressEnter, clickSubmit) {
     return list;
   };
 
-  let target = null;
-  if (selector && selector.trim()) {
-    const matches = querySelectorDeep(selector.trim());
-    target = matches.find((el) => el.offsetParent !== null || el.getBoundingClientRect().width > 0);
-  }
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  if (!target) {
-    const active = document.activeElement;
-    if (
-      active &&
-      active !== document.body &&
-      active !== document.documentElement &&
-      (active.tagName === "INPUT" ||
-        active.tagName === "TEXTAREA" ||
-        active.isContentEditable ||
-        active.getAttribute("contenteditable") === "true")
-    ) {
-      target = active;
-    }
-  }
-
-  if (!target) {
-    const candidateSelectors = [
-      'div#input[contenteditable="true"]',
-      'yt-live-chat-text-input-field-renderer #input',
-      'yt-live-chat-message-input-renderer #input',
-      '#input.yt-live-chat-text-input-field-renderer',
-      '#input[contenteditable="true"]',
-      '#contenteditable-root',
-      'ytd-commentbox #contenteditable-root',
-      '#comment-dialog #contenteditable-root',
-      'textarea[name="q"]',
-      'input[name="q"]',
-      'textarea.gLFyf',
-      'input.gLFyf',
-      'div[contenteditable="true"][role="textbox"]',
-      'div[contenteditable="true"]',
-      '[contenteditable="true"]',
-      'tp-yt-paper-input-container input',
-      'paper-input input',
-      'textarea',
-      'input[type="text"]:not([type="hidden"])',
-      'input[type="search"]',
-      'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"])',
-    ];
-
-    try {
-      const placeholder = querySelectorDeep("#placeholder-area, #simplebox-placeholder").find(
-        (el) => el.offsetParent !== null || el.getBoundingClientRect().width > 0
-      );
-      if (placeholder) placeholder.click();
-    } catch (e) {}
-
-    for (const sel of candidateSelectors) {
-      const found = querySelectorDeep(sel).find(
-        (el) => el.offsetParent !== null || (el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0)
-      );
-      if (found) {
-        target = found;
-        break;
-      }
-    }
-  }
-
-  if (!target) {
-    return { success: false, error: "No editable input found on page" };
-  }
-
-  target.scrollIntoView({ behavior: "instant", block: "center" });
-  target.focus();
-  target.dispatchEvent(new Event("focus", { bubbles: true }));
-  target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
-  target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
-  target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-  if (typeof target.click === "function") target.click();
-
-  // Simulate Ctrl+V clipboard paste event
-  try {
-    const pasteEvent = new ClipboardEvent("paste", {
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      clipboardData: new DataTransfer(),
-    });
-    pasteEvent.clipboardData.setData("text/plain", text);
-    target.dispatchEvent(pasteEvent);
-  } catch (e) {}
-
-  if (target.isContentEditable || target.getAttribute("contenteditable") === "true") {
-    const sel = window.getSelection();
-    const range = document.createRange();
-    range.selectNodeContents(target);
-    sel.removeAllRanges();
-    sel.addRange(range);
-
-    try {
-      document.execCommand("selectAll", false, null);
-      document.execCommand("delete", false, null);
-    } catch (e) {}
-
-    let inserted = false;
-    try {
-      inserted = document.execCommand("insertText", false, text);
-    } catch (e) {}
-
-    if (!inserted || !target.textContent.includes(text)) {
-      target.innerText = text;
-      target.textContent = text;
+  const findTarget = () => {
+    let target = null;
+    if (selector && selector.trim()) {
+      const matches = querySelectorDeep(selector.trim());
+      target = matches.find((el) => el.offsetParent !== null || el.getBoundingClientRect().width > 0);
     }
 
-    try {
-      target.dispatchEvent(
-        new InputEvent("input", {
-          bubbles: true,
-          composed: true,
-          cancelable: true,
-          data: text,
-          inputType: "insertFromPaste",
-        })
-      );
-    } catch (e) {}
-
-    target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-    target.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-  } else {
-    target.value = "";
-    if (typeof target.select === "function") target.select();
-    try {
-      document.execCommand("selectAll", false, null);
-      document.execCommand("delete", false, null);
-    } catch (e) {}
-
-    let inserted = false;
-    try {
-      inserted = document.execCommand("insertText", false, text);
-    } catch (e) {}
-
-    if (!inserted || target.value !== text) {
-      const nativeSetter =
-        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set ||
-        Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
-      if (nativeSetter) {
-        nativeSetter.call(target, text);
-      } else {
-        target.value = text;
+    if (!target) {
+      const active = document.activeElement;
+      if (
+        active &&
+        active !== document.body &&
+        active !== document.documentElement &&
+        (active.tagName === "INPUT" ||
+          active.tagName === "TEXTAREA" ||
+          active.isContentEditable ||
+          active.getAttribute("contenteditable") === "true")
+      ) {
+        target = active;
       }
     }
 
-    try {
-      target.dispatchEvent(
-        new InputEvent("input", {
-          bubbles: true,
-          composed: true,
-          cancelable: true,
-          data: text,
-          inputType: "insertFromPaste",
-        })
-      );
-    } catch (e) {}
-
-    target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-    target.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-  }
-
-  // Press Enter Key
-  if (pressEnter) {
-    const enterInit = {
-      key: "Enter",
-      code: "Enter",
-      keyCode: 13,
-      which: 13,
-      charCode: 13,
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      view: window,
-    };
-    target.dispatchEvent(new KeyboardEvent("keydown", enterInit));
-    target.dispatchEvent(new KeyboardEvent("keypress", enterInit));
-    target.dispatchEvent(new KeyboardEvent("keyup", enterInit));
-  }
-
-  // Click Submit/Send button if found
-  if (clickSubmit) {
-    try {
-      const submitSelectors = [
-        'button[type="submit"]',
-        'input[type="submit"]',
-        'button[aria-label*="Send" i]',
-        'button[aria-label*="Search" i]',
-        'button[aria-label*="Comment" i]',
-        "#send-button button",
-        "yt-live-chat-send-button-renderer button",
-        "ytd-button-renderer#submit-button button",
-        "button.yt-spec-button-shape-next--filled",
-        "button.Tg7LZd",
+    if (!target) {
+      const candidateSelectors = [
+        'div#input[contenteditable="true"]',
+        'yt-live-chat-text-input-field-renderer #input',
+        'yt-live-chat-message-input-renderer #input',
+        '#input.yt-live-chat-text-input-field-renderer',
+        '#input[contenteditable="true"]',
+        '#contenteditable-root',
+        'ytd-commentbox #contenteditable-root',
+        '#comment-dialog #contenteditable-root',
+        'textarea[name="q"]',
+        'input[name="q"]',
+        'textarea.gLFyf',
+        'input.gLFyf',
+        'div[contenteditable="true"][role="textbox"]',
+        'div[contenteditable="true"]',
+        '[contenteditable="true"]',
+        'tp-yt-paper-input-container input',
+        'paper-input input',
+        'textarea',
+        'input[type="text"]:not([type="hidden"])',
+        'input[type="search"]',
+        'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"])',
       ];
-      for (const btnSel of submitSelectors) {
-        const btns = querySelectorDeep(btnSel);
-        const activeBtn = btns.find(
-          (b) => (b.offsetParent !== null || b.getBoundingClientRect().width > 0) && !b.disabled
+
+      try {
+        const placeholder = querySelectorDeep("#placeholder-area, #simplebox-placeholder").find(
+          (el) => el.offsetParent !== null || el.getBoundingClientRect().width > 0
         );
-        if (activeBtn) {
-          activeBtn.click();
+        if (placeholder) placeholder.click();
+      } catch (e) {}
+
+      for (const sel of candidateSelectors) {
+        const found = querySelectorDeep(sel).find(
+          (el) => el.offsetParent !== null || (el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0)
+        );
+        if (found) {
+          target = found;
           break;
         }
       }
-    } catch (e) {}
-  }
+    }
+    return target;
+  };
 
-  return { success: true, tag: target.tagName, id: target.id };
+  return (async () => {
+    const totalBursts = Math.max(1, burstCount || 3);
+    const delayBetweenBursts = Math.max(50, burstDelayMs || 800);
+    let successfulPastes = 0;
+    let lastTagName = "";
+    let lastId = "";
+
+    for (let burstIdx = 0; burstIdx < totalBursts; burstIdx++) {
+      const target = findTarget();
+      if (!target) {
+        if (burstIdx === 0) return { success: false, error: "No editable input found on page" };
+        break;
+      }
+
+      lastTagName = target.tagName;
+      lastId = target.id;
+
+      target.scrollIntoView({ behavior: "instant", block: "center" });
+      target.focus();
+      target.dispatchEvent(new Event("focus", { bubbles: true }));
+      target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+      target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+      target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      if (typeof target.click === "function") target.click();
+
+      await sleep(60);
+
+      // Simulate Ctrl+V clipboard paste event
+      try {
+        const pasteEvent = new ClipboardEvent("paste", {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          clipboardData: new DataTransfer(),
+        });
+        pasteEvent.clipboardData.setData("text/plain", text);
+        target.dispatchEvent(pasteEvent);
+      } catch (e) {}
+
+      if (target.isContentEditable || target.getAttribute("contenteditable") === "true") {
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(target);
+        sel.removeAllRanges();
+        sel.addRange(range);
+
+        try {
+          document.execCommand("selectAll", false, null);
+          document.execCommand("delete", false, null);
+        } catch (e) {}
+
+        let inserted = false;
+        try {
+          inserted = document.execCommand("insertText", false, text);
+        } catch (e) {}
+
+        if (!inserted || !target.textContent.includes(text)) {
+          target.innerText = text;
+          target.textContent = text;
+        }
+
+        try {
+          target.dispatchEvent(
+            new InputEvent("input", {
+              bubbles: true,
+              composed: true,
+              cancelable: true,
+              data: text,
+              inputType: "insertFromPaste",
+            })
+          );
+        } catch (e) {}
+
+        target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+        target.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+      } else {
+        target.value = "";
+        if (typeof target.select === "function") target.select();
+        try {
+          document.execCommand("selectAll", false, null);
+          document.execCommand("delete", false, null);
+        } catch (e) {}
+
+        let inserted = false;
+        try {
+          inserted = document.execCommand("insertText", false, text);
+        } catch (e) {}
+
+        if (!inserted || target.value !== text) {
+          const nativeSetter =
+            Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set ||
+            Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+          if (nativeSetter) {
+            nativeSetter.call(target, text);
+          } else {
+            target.value = text;
+          }
+        }
+
+        try {
+          target.dispatchEvent(
+            new InputEvent("input", {
+              bubbles: true,
+              composed: true,
+              cancelable: true,
+              data: text,
+              inputType: "insertFromPaste",
+            })
+          );
+        } catch (e) {}
+
+        target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+        target.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+      }
+
+      await sleep(100);
+
+      // Press Enter Key
+      if (pressEnter) {
+        const enterInit = {
+          key: "Enter",
+          code: "Enter",
+          keyCode: 13,
+          which: 13,
+          charCode: 13,
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          view: window,
+        };
+        target.dispatchEvent(new KeyboardEvent("keydown", enterInit));
+        target.dispatchEvent(new KeyboardEvent("keypress", enterInit));
+        target.dispatchEvent(new KeyboardEvent("keyup", enterInit));
+      }
+
+      // Click Submit/Send button if found
+      if (clickSubmit) {
+        await sleep(60);
+        try {
+          const submitSelectors = [
+            'button[type="submit"]',
+            'input[type="submit"]',
+            'button[aria-label*="Send" i]',
+            'button[aria-label*="Search" i]',
+            'button[aria-label*="Comment" i]',
+            "#send-button button",
+            "yt-live-chat-send-button-renderer button",
+            "ytd-button-renderer#submit-button button",
+            "button.yt-spec-button-shape-next--filled",
+            "button.Tg7LZd",
+          ];
+          for (const btnSel of submitSelectors) {
+            const btns = querySelectorDeep(btnSel);
+            const activeBtn = btns.find(
+              (b) => (b.offsetParent !== null || b.getBoundingClientRect().width > 0) && !b.disabled
+            );
+            if (activeBtn) {
+              activeBtn.click();
+              break;
+            }
+          }
+        } catch (e) {}
+      }
+
+      successfulPastes++;
+
+      if (burstIdx < totalBursts - 1) {
+        await sleep(delayBetweenBursts);
+      }
+    }
+
+    return { success: true, count: successfulPastes, tag: lastTagName, id: lastId };
+  })();
 }
 

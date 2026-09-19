@@ -123,14 +123,6 @@ if (pasteUrlFilter) {
   pasteUrlFilter.addEventListener("input", updateOpenTabsCount);
 }
 
-if (pasteIsLoop) {
-  pasteIsLoop.addEventListener("change", () => {
-    if (loopIntervalGroup) {
-      loopIntervalGroup.style.display = pasteIsLoop.checked ? "block" : "none";
-    }
-  });
-}
-
 // Tab Switching logic
 function switchTab(targetTab) {
   if (!targetTab) return;
@@ -405,9 +397,9 @@ function updateUI(state) {
     const done = state.pasteCompletedCount || 0;
     const total = state.pasteTotalCount || 0;
     if (tracksPasteInfo) {
-      tracksPasteInfo.textContent = state.isPasteLooping
-        ? `Loop Active: Injected ${done} tab(s). Repeating every ${state.pasteLoopInterval || 5}s...`
-        : `Parallel execution: Injected ${done} / ${total} tab(s) in background.`;
+      tracksPasteInfo.textContent = customStatus || (state.isPasteLooping
+        ? `Loop Active: Injected ${done}/${total} tab(s) (${state.pasteBurstCount || 3}x burst).`
+        : `Parallel execution: Injected ${done}/${total} tab(s) in background.`);
     }
   } else {
     if (tracksPasteInfo) tracksPasteInfo.textContent = "Idle - No active background paste execution.";
@@ -543,10 +535,12 @@ if (startPasteBtn) {
     const targetScope = pasteTargetScope?.value || "all";
     const urlFilter = (pasteUrlFilter?.value || "").trim();
     const selector = (pasteSelector?.value || "").trim();
+    const burstCount = Math.max(1, parseInt(pasteBurstCount?.value, 10) || 3);
+    const burstDelayMs = Math.max(50, parseInt(pasteBurstDelay?.value, 10) || 800);
+    const breakIntervalSec = Math.max(1, parseInt(pasteBreakSec?.value, 10) || 10);
     const pressEnter = pastePressEnter ? pastePressEnter.checked : true;
     const clickSubmit = pasteClickSubmit ? pasteClickSubmit.checked : true;
-    const isLoop = pasteIsLoop ? pasteIsLoop.checked : false;
-    const loopIntervalSec = Math.max(1, parseInt(pasteLoopInterval?.value, 10) || 5);
+    const isLoop = pasteIsLoop ? pasteIsLoop.checked : true;
 
     if (!text) {
       alert("Please enter the text/values to paste.");
@@ -559,10 +553,12 @@ if (startPasteBtn) {
       pasteTargetScope: targetScope,
       pasteUrlFilter: urlFilter,
       pasteSelector: selector,
+      pasteBurstCount: burstCount,
+      pasteBurstDelay: burstDelayMs,
+      pasteBreakSec: breakIntervalSec,
       pastePressEnter: pressEnter,
       pasteClickSubmit: clickSubmit,
       pasteIsLoop: isLoop,
-      pasteLoopInterval: loopIntervalSec,
     });
 
     chrome.runtime.sendMessage({
@@ -573,8 +569,10 @@ if (startPasteBtn) {
       urlFilter,
       pressEnter,
       clickSubmit,
+      burstCount,
+      burstDelayMs,
+      breakIntervalSec,
       isLoop,
-      loopIntervalSec,
     });
 
     switchTab("tracksTab");
