@@ -12,8 +12,7 @@
   "host_permissions": [
     "*://*.youtube.com/*",
     "*://*.google.com/*",
-    "*://myaccount.google.com/*",
-    "<all_urls>"
+    "*://myaccount.google.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -25,7 +24,9 @@
   "content_scripts": [
     {
       "matches": [
-        "<all_urls>"
+        "*://*.youtube.com/*",
+        "*://*.google.com/*",
+        "*://myaccount.google.com/*"
       ],
       "js": [
         "content.js"

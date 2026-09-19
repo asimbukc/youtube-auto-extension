@@ -16,28 +16,6 @@ const startSubBtn = document.getElementById("startSubBtn");
 const subscribeTabStatus = document.getElementById("subscribeTabStatus");
 const subscribeTabDot = document.getElementById("subscribeTabDot");
 
-// Paste & Enter (Parallel across open tabs) Elements
-const openTabsCount = document.getElementById("openTabsCount");
-const pasteInputText = document.getElementById("pasteInputText");
-const pasteTargetScope = document.getElementById("pasteTargetScope");
-const urlFilterGroup = document.getElementById("urlFilterGroup");
-const pasteUrlFilter = document.getElementById("pasteUrlFilter");
-const pasteSelector = document.getElementById("pasteSelector");
-const pasteBurstCount = document.getElementById("pasteBurstCount");
-const pasteBurstDelay = document.getElementById("pasteBurstDelay");
-const pasteBreakSec = document.getElementById("pasteBreakSec");
-const pastePressEnter = document.getElementById("pastePressEnter");
-const pasteClickSubmit = document.getElementById("pasteClickSubmit");
-const pasteIsLoop = document.getElementById("pasteIsLoop");
-const startPasteBtn = document.getElementById("startPasteBtn");
-const pasteTabStatus = document.getElementById("pasteTabStatus");
-const pasteTabDot = document.getElementById("pasteTabDot");
-
-const trackCardPaste = document.getElementById("trackCardPaste");
-const tracksPasteStatus = document.getElementById("tracksPasteStatus");
-const tracksPasteInfo = document.getElementById("tracksPasteInfo");
-const cancelPasteBtn = document.getElementById("cancelPasteBtn");
-
 // Create Channel Elements
 const channelNameInput = document.getElementById("channelName");
 const channelUsernameInput = document.getElementById("channelUsername");
@@ -89,40 +67,6 @@ const tabContents = document.querySelectorAll(".tab-content");
 let isOnBrandAccountsPage = false;
 let currentActiveTabName = "tracksTab";
 
-// Live open tabs count across browser
-async function updateOpenTabsCount() {
-  if (!openTabsCount) return;
-  try {
-    const scope = pasteTargetScope?.value || "all";
-    const filterKeyword = (pasteUrlFilter?.value || "").toLowerCase().trim();
-
-    const tabs = await chrome.tabs.query({});
-    const validTabs = tabs.filter((t) => {
-      const u = t.url || "";
-      if (u.startsWith("chrome://") || u.startsWith("chrome-extension://") || u.startsWith("edge://") || u.startsWith("about:")) return false;
-      if (scope === "active") return t.active;
-      if (scope === "youtube_google") return u.includes("youtube.com") || u.includes("google.com");
-      if (scope === "filter" && filterKeyword) return u.toLowerCase().includes(filterKeyword);
-      return true;
-    });
-
-    openTabsCount.textContent = validTabs.length;
-  } catch (e) {}
-}
-
-if (pasteTargetScope) {
-  pasteTargetScope.addEventListener("change", () => {
-    if (urlFilterGroup) {
-      urlFilterGroup.style.display = pasteTargetScope.value === "filter" ? "block" : "none";
-    }
-    updateOpenTabsCount();
-  });
-}
-
-if (pasteUrlFilter) {
-  pasteUrlFilter.addEventListener("input", updateOpenTabsCount);
-}
-
 // Tab Switching logic
 function switchTab(targetTab) {
   if (!targetTab) return;
@@ -135,7 +79,6 @@ function switchTab(targetTab) {
   if (activeBtn) activeBtn.classList.add("active");
   if (activeContent) activeContent.classList.add("active");
   currentActiveTabName = targetTab;
-  if (targetTab === "pasteTab") updateOpenTabsCount();
 }
 
 tabButtons.forEach((btn) => {
@@ -146,8 +89,6 @@ tabButtons.forEach((btn) => {
 });
 
 function checkActiveTab() {
-  updateOpenTabsCount();
-
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     const activeTab = tabs && tabs[0];
     const url = activeTab?.url || "";
@@ -157,20 +98,6 @@ function checkActiveTab() {
       [
         "isRunning",
         "automationMode",
-        "isPasteRunning",
-        "isPasteLooping",
-        "pasteCompletedCount",
-        "pasteTotalCount",
-        "pasteInputText",
-        "pasteTargetScope",
-        "pasteUrlFilter",
-        "pasteSelector",
-        "pasteBurstCount",
-        "pasteBurstDelay",
-        "pasteBreakSec",
-        "pastePressEnter",
-        "pasteClickSubmit",
-        "pasteIsLoop",
         "isDeleting",
         "isDeletingPaused",
         "isCreatingChannel",
@@ -187,39 +114,6 @@ function checkActiveTab() {
         "activityLogs",
       ],
       (result) => {
-        // Restore input values
-        if (result.pasteInputText && pasteInputText && !pasteInputText.value) {
-          pasteInputText.value = result.pasteInputText;
-        }
-        if (result.pasteTargetScope && pasteTargetScope) {
-          pasteTargetScope.value = result.pasteTargetScope;
-          if (urlFilterGroup) urlFilterGroup.style.display = result.pasteTargetScope === "filter" ? "block" : "none";
-        }
-        if (result.pasteUrlFilter && pasteUrlFilter && !pasteUrlFilter.value) {
-          pasteUrlFilter.value = result.pasteUrlFilter;
-        }
-        if (result.pasteSelector && pasteSelector && !pasteSelector.value) {
-          pasteSelector.value = result.pasteSelector;
-        }
-        if (result.pasteBurstCount !== undefined && pasteBurstCount) {
-          pasteBurstCount.value = result.pasteBurstCount;
-        }
-        if (result.pasteBurstDelay !== undefined && pasteBurstDelay) {
-          pasteBurstDelay.value = result.pasteBurstDelay;
-        }
-        if (result.pasteBreakSec !== undefined && pasteBreakSec) {
-          pasteBreakSec.value = result.pasteBreakSec;
-        }
-        if (result.pastePressEnter !== undefined && pastePressEnter) {
-          pastePressEnter.checked = result.pastePressEnter;
-        }
-        if (result.pasteClickSubmit !== undefined && pasteClickSubmit) {
-          pasteClickSubmit.checked = result.pasteClickSubmit;
-        }
-        if (result.pasteIsLoop !== undefined && pasteIsLoop) {
-          pasteIsLoop.checked = result.pasteIsLoop;
-        }
-
         updateUI(result);
       }
     );
@@ -227,12 +121,11 @@ function checkActiveTab() {
 }
 
 function updateUI(state) {
-  const isSwitchBusy = Boolean(state.isRunning && state.automationMode === "chat");
+  const isSwitchBusy = Boolean(state.isRunning && state.automationMode !== "subscribe");
   const isSubscribeBusy = Boolean(state.isRunning && state.automationMode === "subscribe");
-  const isPasteBusy = Boolean(state.isPasteRunning);
   const isCreateBusy = Boolean(state.isCreatingChannel);
   const isDeleteBusy = Boolean(state.isDeleting || state.isDeletingPaused);
-  const isAnyBusy = isSwitchBusy || isSubscribeBusy || isPasteBusy || isCreateBusy || isDeleteBusy;
+  const isAnyBusy = isSwitchBusy || isSubscribeBusy || isCreateBusy || isDeleteBusy;
 
   const currentIndex = state.currentIndex ?? 0;
   const startIndex = state.startIndex ?? 0;
@@ -261,16 +154,6 @@ function updateUI(state) {
     subscribeTabDot.className = `tab-dot ${isSubscribeBusy ? "busy" : ""}`;
   }
   if (startSubBtn) startSubBtn.disabled = isAnyBusy;
-
-  // Tab 1.8: Paste & Enter
-  if (pasteTabStatus) {
-    pasteTabStatus.textContent = isPasteBusy ? (state.isPasteLooping ? "Looping" : "Busy") : "Free";
-    pasteTabStatus.className = `tab-status-pill ${isPasteBusy ? "status-busy" : "status-free"}`;
-  }
-  if (pasteTabDot) {
-    pasteTabDot.className = `tab-dot ${isPasteBusy ? "busy" : ""}`;
-  }
-  if (startPasteBtn) startPasteBtn.disabled = isAnyBusy;
 
   // Tab 2: Create Channel
   if (createTabStatus) {
@@ -350,11 +233,6 @@ function updateUI(state) {
     statusText.textContent = customStatus;
     statusText.style.color = "var(--success)";
     indexBadge.textContent = `Channel: ${currentIndex}/${endIndex}`;
-  } else if (isPasteBusy) {
-    statusDot.classList.add("active");
-    statusText.textContent = customStatus;
-    statusText.style.color = "var(--send-accent)";
-    indexBadge.textContent = state.isPasteLooping ? "Looping" : "Parallel BG";
   } else {
     statusDot.className = "status-dot";
     statusText.textContent = customStatus;
@@ -384,25 +262,6 @@ function updateUI(state) {
     if (tracksSubscribeInfo) tracksSubscribeInfo.textContent = `Processing Channel #${currentIndex} (Range: ${startIndex} → ${endIndex})`;
   } else {
     if (tracksSubscribeInfo) tracksSubscribeInfo.textContent = "Idle - No active subscribe automation.";
-  }
-
-  // Operation Card 1.8: Auto Paste & Enter (Parallel BG)
-  if (tracksPasteStatus) {
-    tracksPasteStatus.textContent = isPasteBusy ? (state.isPasteLooping ? "Looping" : "Busy") : "Free";
-    tracksPasteStatus.className = `tab-status-pill ${isPasteBusy ? "status-busy" : "status-free"}`;
-  }
-  if (trackCardPaste) trackCardPaste.classList.toggle("busy", isPasteBusy);
-  if (cancelPasteBtn) cancelPasteBtn.disabled = !isPasteBusy;
-  if (isPasteBusy) {
-    const done = state.pasteCompletedCount || 0;
-    const total = state.pasteTotalCount || 0;
-    if (tracksPasteInfo) {
-      tracksPasteInfo.textContent = customStatus || (state.isPasteLooping
-        ? `Loop Active: Injected ${done}/${total} tab(s) (${state.pasteBurstCount || 3}x burst).`
-        : `Parallel execution: Injected ${done}/${total} tab(s) in background.`);
-    }
-  } else {
-    if (tracksPasteInfo) tracksPasteInfo.textContent = "Idle - No active background paste execution.";
   }
 
   // Operation Card 2: Channel Creation
@@ -528,57 +387,6 @@ if (startSubBtn) {
   });
 }
 
-// Start Auto Paste & Enter across already-open tabs in parallel background threads
-if (startPasteBtn) {
-  startPasteBtn.addEventListener("click", () => {
-    const text = (pasteInputText?.value || "").trim();
-    const targetScope = pasteTargetScope?.value || "all";
-    const urlFilter = (pasteUrlFilter?.value || "").trim();
-    const selector = (pasteSelector?.value || "").trim();
-    const burstCount = Math.max(1, parseInt(pasteBurstCount?.value, 10) || 3);
-    const burstDelayMs = Math.max(50, parseInt(pasteBurstDelay?.value, 10) || 800);
-    const breakIntervalSec = Math.max(1, parseInt(pasteBreakSec?.value, 10) || 10);
-    const pressEnter = pastePressEnter ? pastePressEnter.checked : true;
-    const clickSubmit = pasteClickSubmit ? pasteClickSubmit.checked : true;
-    const isLoop = pasteIsLoop ? pasteIsLoop.checked : true;
-
-    if (!text) {
-      alert("Please enter the text/values to paste.");
-      return;
-    }
-
-    // Persist values to storage
-    chrome.storage.local.set({
-      pasteInputText: text,
-      pasteTargetScope: targetScope,
-      pasteUrlFilter: urlFilter,
-      pasteSelector: selector,
-      pasteBurstCount: burstCount,
-      pasteBurstDelay: burstDelayMs,
-      pasteBreakSec: breakIntervalSec,
-      pastePressEnter: pressEnter,
-      pasteClickSubmit: clickSubmit,
-      pasteIsLoop: isLoop,
-    });
-
-    chrome.runtime.sendMessage({
-      action: "start_parallel_paste",
-      text,
-      selector,
-      targetScope,
-      urlFilter,
-      pressEnter,
-      clickSubmit,
-      burstCount,
-      burstDelayMs,
-      breakIntervalSec,
-      isLoop,
-    });
-
-    switchTab("tracksTab");
-  });
-}
-
 // Start YouTube Channel Creation
 createChannelBtn.addEventListener("click", () => {
   const channelName = (channelNameInput.value.trim() || "Messi");
@@ -684,21 +492,6 @@ if (cancelSubscribeBtn) {
       automationMode: "",
       currentIndex: 0,
       statusText: "Subscribe automation cancelled by user",
-    });
-  });
-}
-
-// 1.8 Cancel Auto Paste & Enter
-if (cancelPasteBtn) {
-  cancelPasteBtn.addEventListener("click", () => {
-    chrome.runtime.sendMessage({
-      action: "stop_parallel_paste",
-    });
-
-    updateUI({
-      isPasteRunning: false,
-      isPasteLooping: false,
-      statusText: "Background paste stopped by user",
     });
   });
 }
