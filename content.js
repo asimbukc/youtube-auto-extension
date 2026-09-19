@@ -722,7 +722,7 @@
       await waitForPageReady();
 
       const storageState = await new Promise((resolve) => {
-        chrome.storage.local.get(['automationMode'], resolve);
+        chrome.storage.local.get(['automationMode', 'sendTextMessage', 'sendTextSelector'], resolve);
       });
       const automationMode = storageState.automationMode || "chat";
 
@@ -753,6 +753,201 @@
           }
         } catch (err) {
           console.log("[YT Switcher] Subscribe button not found on this page.");
+        }
+      } else if (automationMode === "send_text") {
+        console.log("[YT Switcher] Automation Mode: Send Text & Enter. Looking for target input field...");
+        const textToSend = storageState.sendTextMessage || "";
+        const customSelector = storageState.sendTextSelector || "";
+
+        try {
+          const inputSelectors = [
+            ...(customSelector ? [customSelector] : []),
+            'div#input[contenteditable="true"]',
+            'yt-live-chat-text-input-field-renderer #input',
+            'yt-live-chat-message-input-renderer #input',
+            '#input.yt-live-chat-text-input-field-renderer',
+            '#input[contenteditable="true"]',
+            '#contenteditable-root',
+            'ytd-commentbox #contenteditable-root',
+            '#comment-dialog #contenteditable-root',
+            'tp-yt-paper-input-container input',
+            'paper-input input',
+            'textarea',
+            'input[type="text"]',
+            'input[type="search"]',
+            'input:not([type="hidden"])',
+            '[contenteditable="true"]',
+          ];
+
+          // If on video comments page and comments placeholder is shown, click placeholder first to reveal input
+          try {
+            const commentPlaceholder = querySelectorDeep('#placeholder-area, #simplebox-placeholder').find(
+              (el) => el.offsetParent !== null || el.getBoundingClientRect().width > 0
+            );
+            if (commentPlaceholder) {
+              await smartClick(commentPlaceholder);
+              await sleep(350);
+            }
+          } catch (e) {}
+
+          const focusTarget = await waitForDeep(() => {
+            for (const selector of inputSelectors) {
+              const matched = querySelectorDeep(selector);
+              const visible = matched.find((el) => {
+                const rect = el.getBoundingClientRect();
+                return el.offsetParent !== null || (rect.width > 0 && rect.height > 0);
+              });
+              if (visible) return visible;
+            }
+            return null;
+          }, 15000);
+
+          if (focusTarget) {
+            console.log("[YT Switcher] Found target input for Send Text. Activating...", focusTarget);
+            focusTarget.scrollIntoView({ behavior: "smooth", block: "center" });
+            await sleep(200);
+
+            focusTarget.focus();
+            focusTarget.dispatchEvent(new Event("focus", { bubbles: true }));
+            focusTarget.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+            focusTarget.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+            focusTarget.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+            if (typeof focusTarget.click === "function") {
+              focusTarget.click();
+            }
+
+            await sleep(150);
+
+            // Type text into input (contenteditable or standard input/textarea)
+            if (textToSend) {
+              console.log(`[YT Switcher] Typing text: "${textToSend}"`);
+              if (focusTarget.isContentEditable) {
+                const range = document.createRange();
+                const sel = window.getSelection();
+                range.selectNodeContents(focusTarget);
+                sel.removeAllRanges();
+                sel.addRange(range);
+
+                try {
+                  document.execCommand("selectAll", false, null);
+                  document.execCommand("delete", false, null);
+                } catch (e) {}
+
+                let inserted = false;
+                try {
+                  inserted = document.execCommand("insertText", false, textToSend);
+                } catch (e) {}
+
+                if (!inserted || !focusTarget.textContent.includes(textToSend)) {
+                  focusTarget.innerText = textToSend;
+                  focusTarget.textContent = textToSend;
+                }
+
+                try {
+                  focusTarget.dispatchEvent(
+                    new InputEvent("input", {
+                      bubbles: true,
+                      composed: true,
+                      cancelable: true,
+                      data: textToSend,
+                      inputType: "insertText",
+                    })
+                  );
+                } catch (e) {}
+
+                focusTarget.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+                focusTarget.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+              } else {
+                focusTarget.value = "";
+                if (typeof focusTarget.select === "function") focusTarget.select();
+                try {
+                  document.execCommand("selectAll", false, null);
+                  document.execCommand("delete", false, null);
+                } catch (e) {}
+
+                let inserted = false;
+                try {
+                  inserted = document.execCommand("insertText", false, textToSend);
+                } catch (e) {}
+
+                if (!inserted || focusTarget.value !== textToSend) {
+                  const nativeSetter =
+                    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set ||
+                    Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+                  if (nativeSetter) {
+                    nativeSetter.call(focusTarget, textToSend);
+                  } else {
+                    focusTarget.value = textToSend;
+                  }
+                }
+
+                try {
+                  focusTarget.dispatchEvent(
+                    new InputEvent("input", {
+                      bubbles: true,
+                      composed: true,
+                      cancelable: true,
+                      data: textToSend,
+                      inputType: "insertText",
+                    })
+                  );
+                } catch (e) {}
+
+                focusTarget.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+                focusTarget.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+              }
+
+              await sleep(200);
+
+              // Dispatch Enter key events (keydown, keypress, keyup)
+              console.log("[YT Switcher] Pressing Enter...");
+              const enterEventInit = {
+                key: "Enter",
+                code: "Enter",
+                keyCode: 13,
+                which: 13,
+                charCode: 13,
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                view: window,
+              };
+
+              focusTarget.dispatchEvent(new KeyboardEvent("keydown", enterEventInit));
+              focusTarget.dispatchEvent(new KeyboardEvent("keypress", enterEventInit));
+              focusTarget.dispatchEvent(new KeyboardEvent("keyup", enterEventInit));
+
+              await sleep(150);
+
+              // Also check for send/submit button if Enter didn't trigger submission
+              try {
+                const sendBtnSelectors = [
+                  'button[aria-label*="Send" i]',
+                  'button[aria-label*="Comment" i]',
+                  '#send-button button',
+                  'yt-live-chat-send-button-renderer button',
+                  'ytd-button-renderer#submit-button button',
+                  'button.yt-spec-button-shape-next--filled',
+                ];
+                for (const btnSelector of sendBtnSelectors) {
+                  const sendBtns = querySelectorDeep(btnSelector);
+                  const activeSendBtn = sendBtns.find(
+                    (b) => (b.offsetParent !== null || b.getBoundingClientRect().width > 0) && !b.disabled
+                  );
+                  if (activeSendBtn) {
+                    console.log("[YT Switcher] Found active Send/Submit button. Clicking...", activeSendBtn);
+                    await smartClick(activeSendBtn);
+                    break;
+                  }
+                }
+              } catch (e) {}
+
+              console.log("✅ [YT Switcher] Text sent and Enter pressed successfully!");
+            }
+          }
+        } catch (err) {
+          console.error("[YT Switcher] Error during Send Text automation:", err);
         }
       } else {
         console.log("[YT Switcher] Automation Mode: Chat. Searching for chat/text input to focus...");
@@ -1394,6 +1589,246 @@
     setInterval(runCycle, 1500);
     runCycle();
   }
+
+  // ==============================================================
+  // STEP 4: UNIVERSAL AUTO PASTE & ENTER MESSAGE LISTENER
+  // ==============================================================
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === "execute_paste_and_enter") {
+      (async () => {
+        try {
+          const { text, selector, pressEnter, clickSubmit } = message;
+          console.log(`[Auto Paste] Received paste command for text: "${text}"`);
+
+          let target = null;
+          if (selector && selector.trim()) {
+            const matches = querySelectorDeep(selector.trim());
+            target = matches.find((el) => el.offsetParent !== null || el.getBoundingClientRect().width > 0);
+          }
+
+          if (!target) {
+            const active = document.activeElement;
+            if (
+              active &&
+              active !== document.body &&
+              active !== document.documentElement &&
+              (active.tagName === "INPUT" ||
+                active.tagName === "TEXTAREA" ||
+                active.isContentEditable ||
+                active.getAttribute("contenteditable") === "true")
+            ) {
+              target = active;
+            }
+          }
+
+          if (!target) {
+            const candidateSelectors = [
+              'div#input[contenteditable="true"]',
+              'yt-live-chat-text-input-field-renderer #input',
+              'yt-live-chat-message-input-renderer #input',
+              '#input.yt-live-chat-text-input-field-renderer',
+              '#input[contenteditable="true"]',
+              '#contenteditable-root',
+              'ytd-commentbox #contenteditable-root',
+              '#comment-dialog #contenteditable-root',
+              'textarea[name="q"]',
+              'input[name="q"]',
+              'textarea.gLFyf',
+              'input.gLFyf',
+              'div[contenteditable="true"][role="textbox"]',
+              'div[contenteditable="true"]',
+              '[contenteditable="true"]',
+              'tp-yt-paper-input-container input',
+              'paper-input input',
+              'textarea',
+              'input[type="text"]:not([type="hidden"])',
+              'input[type="search"]',
+              'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"])',
+            ];
+
+            try {
+              const placeholder = querySelectorDeep("#placeholder-area, #simplebox-placeholder").find(
+                (el) => el.offsetParent !== null || el.getBoundingClientRect().width > 0
+              );
+              if (placeholder) {
+                placeholder.click();
+                await sleep(300);
+              }
+            } catch (e) {}
+
+            for (const sel of candidateSelectors) {
+              const found = querySelectorDeep(sel).find(
+                (el) => el.offsetParent !== null || (el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0)
+              );
+              if (found) {
+                target = found;
+                break;
+              }
+            }
+          }
+
+          if (!target) {
+            sendResponse({ success: false, error: "No editable input found on page" });
+            return;
+          }
+
+          target.scrollIntoView({ behavior: "instant", block: "center" });
+          target.focus();
+          target.dispatchEvent(new Event("focus", { bubbles: true }));
+          target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+          target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+          target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+          if (typeof target.click === "function") target.click();
+
+          await sleep(100);
+
+          // Simulated Ctrl+V paste event
+          try {
+            const pasteEvent = new ClipboardEvent("paste", {
+              bubbles: true,
+              cancelable: true,
+              composed: true,
+              clipboardData: new DataTransfer(),
+            });
+            pasteEvent.clipboardData.setData("text/plain", text);
+            target.dispatchEvent(pasteEvent);
+          } catch (e) {}
+
+          if (target.isContentEditable || target.getAttribute("contenteditable") === "true") {
+            const sel = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(target);
+            sel.removeAllRanges();
+            sel.addRange(range);
+
+            try {
+              document.execCommand("selectAll", false, null);
+              document.execCommand("delete", false, null);
+            } catch (e) {}
+
+            let inserted = false;
+            try {
+              inserted = document.execCommand("insertText", false, text);
+            } catch (e) {}
+
+            if (!inserted || !target.textContent.includes(text)) {
+              target.innerText = text;
+              target.textContent = text;
+            }
+
+            try {
+              target.dispatchEvent(
+                new InputEvent("input", {
+                  bubbles: true,
+                  composed: true,
+                  cancelable: true,
+                  data: text,
+                  inputType: "insertFromPaste",
+                })
+              );
+            } catch (e) {}
+
+            target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+            target.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+          } else {
+            target.value = "";
+            if (typeof target.select === "function") target.select();
+            try {
+              document.execCommand("selectAll", false, null);
+              document.execCommand("delete", false, null);
+            } catch (e) {}
+
+            let inserted = false;
+            try {
+              inserted = document.execCommand("insertText", false, text);
+            } catch (e) {}
+
+            if (!inserted || target.value !== text) {
+              const nativeSetter =
+                Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set ||
+                Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+              if (nativeSetter) {
+                nativeSetter.call(target, text);
+              } else {
+                target.value = text;
+              }
+            }
+
+            try {
+              target.dispatchEvent(
+                new InputEvent("input", {
+                  bubbles: true,
+                  composed: true,
+                  cancelable: true,
+                  data: text,
+                  inputType: "insertFromPaste",
+                })
+              );
+            } catch (e) {}
+
+            target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+            target.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+          }
+
+          await sleep(120);
+
+          // Press Enter key
+          if (pressEnter) {
+            const enterInit = {
+              key: "Enter",
+              code: "Enter",
+              keyCode: 13,
+              which: 13,
+              charCode: 13,
+              bubbles: true,
+              cancelable: true,
+              composed: true,
+              view: window,
+            };
+            target.dispatchEvent(new KeyboardEvent("keydown", enterInit));
+            target.dispatchEvent(new KeyboardEvent("keypress", enterInit));
+            target.dispatchEvent(new KeyboardEvent("keyup", enterInit));
+          }
+
+          // Click submit/send button
+          if (clickSubmit) {
+            await sleep(100);
+            try {
+              const submitSelectors = [
+                'button[type="submit"]',
+                'input[type="submit"]',
+                'button[aria-label*="Send" i]',
+                'button[aria-label*="Search" i]',
+                'button[aria-label*="Comment" i]',
+                "#send-button button",
+                "yt-live-chat-send-button-renderer button",
+                "ytd-button-renderer#submit-button button",
+                "button.yt-spec-button-shape-next--filled",
+                "button.Tg7LZd",
+              ];
+              for (const btnSel of submitSelectors) {
+                const btns = querySelectorDeep(btnSel);
+                const activeBtn = btns.find(
+                  (b) => (b.offsetParent !== null || b.getBoundingClientRect().width > 0) && !b.disabled
+                );
+                if (activeBtn) {
+                  activeBtn.click();
+                  break;
+                }
+              }
+            } catch (e) {}
+          }
+
+          console.log("✅ [Auto Paste] Finished paste and Enter execution on tab.");
+          sendResponse({ success: true, tag: target.tagName, id: target.id });
+        } catch (err) {
+          console.error("[Auto Paste] Error executing paste:", err);
+          sendResponse({ success: false, error: err.message });
+        }
+      })();
+      return true;
+    }
+  });
 })();
 
 

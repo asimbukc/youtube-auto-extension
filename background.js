@@ -67,6 +67,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === "stop_automation") {
     handleStopAutomation();
     sendResponse({ status: "stopped" });
+  } else if (message.action === "start_parallel_paste") {
+    handleStartParallelPaste(message);
+    sendResponse({ status: "started_parallel_paste" });
+  } else if (message.action === "stop_parallel_paste") {
+    handleStopParallelPaste();
+    sendResponse({ status: "stopped_parallel_paste" });
   } else if (message.action === "start_channel_creation") {
     handleStartChannelCreation(message);
     sendResponse({ status: "started_channel_creation" });
@@ -567,7 +573,14 @@ async function handleStopChannelCreation() {
 // SWITCH & CHAT AUTOMATION
 // ==============================================================
 
-async function handleStartAutomation({ chatUrl, startIndex, endIndex, automationMode = "chat" }) {
+async function handleStartAutomation({
+  chatUrl,
+  startIndex,
+  endIndex,
+  automationMode = "chat",
+  sendTextMessage = "",
+  sendTextSelector = "",
+}) {
   handleStopAutomation(); // Reset any existing active timers
 
   isRunning = true;
@@ -578,11 +591,13 @@ async function handleStartAutomation({ chatUrl, startIndex, endIndex, automation
     startIndex: parseInt(startIndex, 10) || 0,
     endIndex: parseInt(endIndex, 10) || 0,
     automationMode: automationMode,
+    sendTextMessage: sendTextMessage || "",
+    sendTextSelector: sendTextSelector || "",
   };
 
   const totalTabs = Math.max(0, config.endIndex - config.startIndex + 1);
   console.log(
-    `[Background] Starting range-based automation: Channels ${config.startIndex} to ${config.endIndex} (${totalTabs} tabs)`
+    `[Background] Starting range-based automation: Channels ${config.startIndex} to ${config.endIndex} (${totalTabs} tabs) [Mode: ${config.automationMode}]`
   );
 
   await chrome.storage.local.set({
@@ -594,10 +609,16 @@ async function handleStartAutomation({ chatUrl, startIndex, endIndex, automation
     endIndex: config.endIndex,
     liveChatUrl: config.chatUrl,
     automationMode: config.automationMode,
+    sendTextMessage: config.sendTextMessage,
+    sendTextSelector: config.sendTextSelector,
     statusText: `Launching Channel #${config.startIndex} (Range: ${config.startIndex} → ${config.endIndex})...`,
   });
 
-  addActivityLog(`Started ${config.automationMode === "subscribe" ? "Subscribe" : "Switch & Chat"}: Channels ${config.startIndex} to ${config.endIndex}`, "info");
+  let modeLabel = "Switch & Chat";
+  if (config.automationMode === "subscribe") modeLabel = "Subscribe";
+  else if (config.automationMode === "send_text") modeLabel = "Send Text";
+
+  addActivityLog(`Started ${modeLabel}: Channels ${config.startIndex} to ${config.endIndex}`, "info");
 
   // Launch initial tab
   await launchTabForIndex(config.startIndex);
@@ -1075,3 +1096,428 @@ async function handleStopAutomation() {
     addActivityLog("Switch & Chat automation cancelled", "warning");
   }
 }
+
+// ==============================================================
+// AUTO PASTE & ENTER (PARALLEL BACKGROUND EXECUTION ACROSS OPEN TABS)
+// ==============================================================
+
+let isPasteRunning = false;
+let isPasteLooping = false;
+let pasteLoopTimer = null;
+let pasteConfig = {
+  text: "",
+  selector: "",
+  targetScope: "all",
+  urlFilter: "",
+  pressEnter: true,
+  clickSubmit: true,
+  isLoop: false,
+  loopIntervalSec: 5,
+};
+
+async function handleStartParallelPaste(params) {
+  handleStopParallelPaste();
+
+  isPasteRunning = true;
+  isPasteLooping = Boolean(params.isLoop);
+  pasteConfig = { ...params };
+
+  await chrome.storage.local.set({
+    isPasteRunning: true,
+    isPasteLooping: isPasteLooping,
+    pasteInputText: params.text,
+    pasteTargetScope: params.targetScope,
+    pasteUrlFilter: params.urlFilter,
+    pasteSelector: params.selector,
+    pastePressEnter: params.pressEnter,
+    pasteClickSubmit: params.clickSubmit,
+    pasteIsLoop: params.isLoop,
+    pasteLoopInterval: params.loopIntervalSec,
+    statusText: `Starting parallel paste across open tabs...`,
+  });
+
+  addActivityLog(`Starting parallel background paste (Ctrl+V & Enter) [Scope: ${params.targetScope}]`, "info");
+
+  // Run immediately
+  await executeParallelPasteCycle();
+
+  // If loop is enabled, schedule recurring execution
+  if (isPasteLooping && isPasteRunning) {
+    const intervalMs = Math.max(1000, (params.loopIntervalSec || 5) * 1000);
+    pasteLoopTimer = setInterval(async () => {
+      if (isPasteRunning) {
+        await executeParallelPasteCycle();
+      } else {
+        clearInterval(pasteLoopTimer);
+      }
+    }, intervalMs);
+  }
+}
+
+function handleStopParallelPaste() {
+  if (pasteLoopTimer) {
+    clearInterval(pasteLoopTimer);
+    pasteLoopTimer = null;
+  }
+  isPasteRunning = false;
+  isPasteLooping = false;
+
+  chrome.storage.local.set({
+    isPasteRunning: false,
+    isPasteLooping: false,
+    statusText: "Background paste stopped by user",
+  });
+  addActivityLog("Background paste stopped", "warning");
+}
+
+async function executeParallelPasteCycle() {
+  if (!isPasteRunning) return;
+
+  try {
+    const tabs = await chrome.tabs.query({});
+    const scope = pasteConfig.targetScope || "all";
+    const filterKeyword = (pasteConfig.urlFilter || "").toLowerCase().trim();
+
+    // Filter valid target tabs (excluding system/internal browser pages)
+    const targetTabs = tabs.filter((t) => {
+      const u = t.url || "";
+      if (
+        u.startsWith("chrome://") ||
+        u.startsWith("chrome-extension://") ||
+        u.startsWith("edge://") ||
+        u.startsWith("about:") ||
+        u.startsWith("devtools://")
+      )
+        return false;
+      if (scope === "active") return t.active;
+      if (scope === "youtube_google") return u.includes("youtube.com") || u.includes("google.com");
+      if (scope === "filter" && filterKeyword) return u.toLowerCase().includes(filterKeyword);
+      return true;
+    });
+
+    if (targetTabs.length === 0) {
+      const msg = `No matching open tabs found for scope "${scope}".`;
+      console.warn(`[Background] ${msg}`);
+      await chrome.storage.local.set({
+        pasteCompletedCount: 0,
+        pasteTotalCount: 0,
+        statusText: msg,
+      });
+      addActivityLog(msg, "warning");
+      if (!isPasteLooping) {
+        isPasteRunning = false;
+        await chrome.storage.local.set({ isPasteRunning: false });
+      }
+      return;
+    }
+
+    console.log(`[Background] Executing parallel paste on ${targetTabs.length} open tab(s)...`);
+    await chrome.storage.local.set({
+      pasteCompletedCount: 0,
+      pasteTotalCount: targetTabs.length,
+      statusText: `Injecting paste & Enter across ${targetTabs.length} tab(s) in parallel...`,
+    });
+
+    let completedCount = 0;
+
+    // Parallel execution across all matching tabs (true background multi-threading)
+    const workerPromises = targetTabs.map(async (tab) => {
+      try {
+        let response = null;
+        try {
+          response = await chrome.tabs.sendMessage(tab.id, {
+            action: "execute_paste_and_enter",
+            text: pasteConfig.text,
+            selector: pasteConfig.selector,
+            pressEnter: pasteConfig.pressEnter,
+            clickSubmit: pasteConfig.clickSubmit,
+          });
+        } catch (msgErr) {
+          // Fallback: If content script is not yet listening on this tab, dynamically inject worker function
+          const injectionResults = await chrome.scripting.executeScript({
+            target: { tabId: tab.id, allFrames: false },
+            func: injectedPasteAndEnterWorker,
+            args: [
+              pasteConfig.text,
+              pasteConfig.selector,
+              pasteConfig.pressEnter,
+              pasteConfig.clickSubmit,
+            ],
+          });
+          response = injectionResults?.[0]?.result;
+        }
+
+        completedCount++;
+        const tabTitle = tab.title ? tab.title.substring(0, 30) : `Tab #${tab.id}`;
+        console.log(`[Background] Tab ${tab.id} ("${tabTitle}") completed paste.`);
+        addActivityLog(`[Tab ${tab.id}] Pasted & Pressed Enter on "${tabTitle}"`, "success");
+        await chrome.storage.local.set({ pasteCompletedCount: completedCount });
+        return { tabId: tab.id, success: true, response };
+      } catch (err) {
+        console.error(`[Background] Error injecting paste into tab ${tab.id}:`, err);
+        addActivityLog(`[Tab ${tab.id}] Injection error: ${err.message}`, "error");
+        return { tabId: tab.id, success: false, error: err.message };
+      }
+    });
+
+    await Promise.allSettled(workerPromises);
+
+    const summaryText = isPasteLooping
+      ? `Loop active: Injected ${completedCount}/${targetTabs.length} tab(s). Repeating...`
+      : `Completed paste & Enter on ${completedCount}/${targetTabs.length} tab(s) in parallel!`;
+
+    console.log(`[Background] ${summaryText}`);
+    await chrome.storage.local.set({
+      pasteCompletedCount: completedCount,
+      pasteTotalCount: targetTabs.length,
+      statusText: summaryText,
+      ...(isPasteLooping ? {} : { isPasteRunning: false }),
+    });
+
+    if (!isPasteLooping) {
+      isPasteRunning = false;
+      addActivityLog(summaryText, "success");
+    }
+  } catch (err) {
+    console.error("[Background] Global error during parallel paste:", err);
+  }
+}
+
+// Injected fallback worker that runs inside tab context
+function injectedPasteAndEnterWorker(text, selector, pressEnter, clickSubmit) {
+  const querySelectorDeep = (sel, root = document) => {
+    const list = [];
+    const walk = (node) => {
+      if (!node) return;
+      try {
+        node.querySelectorAll(sel).forEach((el) => list.push(el));
+      } catch (e) {}
+      try {
+        node.querySelectorAll("*").forEach((el) => {
+          if (el.shadowRoot) walk(el.shadowRoot);
+          if (el.tagName === "IFRAME") {
+            try {
+              const doc = el.contentDocument || el.contentWindow?.document;
+              if (doc) walk(doc);
+            } catch (e) {}
+          }
+        });
+      } catch (e) {}
+    };
+    walk(root);
+    return list;
+  };
+
+  let target = null;
+  if (selector && selector.trim()) {
+    const matches = querySelectorDeep(selector.trim());
+    target = matches.find((el) => el.offsetParent !== null || el.getBoundingClientRect().width > 0);
+  }
+
+  if (!target) {
+    const active = document.activeElement;
+    if (
+      active &&
+      active !== document.body &&
+      active !== document.documentElement &&
+      (active.tagName === "INPUT" ||
+        active.tagName === "TEXTAREA" ||
+        active.isContentEditable ||
+        active.getAttribute("contenteditable") === "true")
+    ) {
+      target = active;
+    }
+  }
+
+  if (!target) {
+    const candidateSelectors = [
+      'div#input[contenteditable="true"]',
+      'yt-live-chat-text-input-field-renderer #input',
+      'yt-live-chat-message-input-renderer #input',
+      '#input.yt-live-chat-text-input-field-renderer',
+      '#input[contenteditable="true"]',
+      '#contenteditable-root',
+      'ytd-commentbox #contenteditable-root',
+      '#comment-dialog #contenteditable-root',
+      'textarea[name="q"]',
+      'input[name="q"]',
+      'textarea.gLFyf',
+      'input.gLFyf',
+      'div[contenteditable="true"][role="textbox"]',
+      'div[contenteditable="true"]',
+      '[contenteditable="true"]',
+      'tp-yt-paper-input-container input',
+      'paper-input input',
+      'textarea',
+      'input[type="text"]:not([type="hidden"])',
+      'input[type="search"]',
+      'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"])',
+    ];
+
+    try {
+      const placeholder = querySelectorDeep("#placeholder-area, #simplebox-placeholder").find(
+        (el) => el.offsetParent !== null || el.getBoundingClientRect().width > 0
+      );
+      if (placeholder) placeholder.click();
+    } catch (e) {}
+
+    for (const sel of candidateSelectors) {
+      const found = querySelectorDeep(sel).find(
+        (el) => el.offsetParent !== null || (el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0)
+      );
+      if (found) {
+        target = found;
+        break;
+      }
+    }
+  }
+
+  if (!target) {
+    return { success: false, error: "No editable input found on page" };
+  }
+
+  target.scrollIntoView({ behavior: "instant", block: "center" });
+  target.focus();
+  target.dispatchEvent(new Event("focus", { bubbles: true }));
+  target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+  target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  if (typeof target.click === "function") target.click();
+
+  // Simulate Ctrl+V clipboard paste event
+  try {
+    const pasteEvent = new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clipboardData: new DataTransfer(),
+    });
+    pasteEvent.clipboardData.setData("text/plain", text);
+    target.dispatchEvent(pasteEvent);
+  } catch (e) {}
+
+  if (target.isContentEditable || target.getAttribute("contenteditable") === "true") {
+    const sel = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    try {
+      document.execCommand("selectAll", false, null);
+      document.execCommand("delete", false, null);
+    } catch (e) {}
+
+    let inserted = false;
+    try {
+      inserted = document.execCommand("insertText", false, text);
+    } catch (e) {}
+
+    if (!inserted || !target.textContent.includes(text)) {
+      target.innerText = text;
+      target.textContent = text;
+    }
+
+    try {
+      target.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          composed: true,
+          cancelable: true,
+          data: text,
+          inputType: "insertFromPaste",
+        })
+      );
+    } catch (e) {}
+
+    target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    target.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+  } else {
+    target.value = "";
+    if (typeof target.select === "function") target.select();
+    try {
+      document.execCommand("selectAll", false, null);
+      document.execCommand("delete", false, null);
+    } catch (e) {}
+
+    let inserted = false;
+    try {
+      inserted = document.execCommand("insertText", false, text);
+    } catch (e) {}
+
+    if (!inserted || target.value !== text) {
+      const nativeSetter =
+        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set ||
+        Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+      if (nativeSetter) {
+        nativeSetter.call(target, text);
+      } else {
+        target.value = text;
+      }
+    }
+
+    try {
+      target.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          composed: true,
+          cancelable: true,
+          data: text,
+          inputType: "insertFromPaste",
+        })
+      );
+    } catch (e) {}
+
+    target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    target.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+  }
+
+  // Press Enter Key
+  if (pressEnter) {
+    const enterInit = {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+      which: 13,
+      charCode: 13,
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      view: window,
+    };
+    target.dispatchEvent(new KeyboardEvent("keydown", enterInit));
+    target.dispatchEvent(new KeyboardEvent("keypress", enterInit));
+    target.dispatchEvent(new KeyboardEvent("keyup", enterInit));
+  }
+
+  // Click Submit/Send button if found
+  if (clickSubmit) {
+    try {
+      const submitSelectors = [
+        'button[type="submit"]',
+        'input[type="submit"]',
+        'button[aria-label*="Send" i]',
+        'button[aria-label*="Search" i]',
+        'button[aria-label*="Comment" i]',
+        "#send-button button",
+        "yt-live-chat-send-button-renderer button",
+        "ytd-button-renderer#submit-button button",
+        "button.yt-spec-button-shape-next--filled",
+        "button.Tg7LZd",
+      ];
+      for (const btnSel of submitSelectors) {
+        const btns = querySelectorDeep(btnSel);
+        const activeBtn = btns.find(
+          (b) => (b.offsetParent !== null || b.getBoundingClientRect().width > 0) && !b.disabled
+        );
+        if (activeBtn) {
+          activeBtn.click();
+          break;
+        }
+      }
+    } catch (e) {}
+  }
+
+  return { success: true, tag: target.tagName, id: target.id };
+}
+
